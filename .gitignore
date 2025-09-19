@@ -1,0 +1,4 @@
+build-pico2
+build
+.cache
+__pycache__

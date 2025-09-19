@@ -1,0 +1,3 @@
+[submodule "lib/pico-display-lib"]
+	path = lib/pico-display-lib
+	url = https://github.com/embeddedboys/pico-display-lib.git
