@@ -40,6 +40,7 @@
 #include "task.h"
 #include "semphr.h"
 
+#include "usb.h"
 #include "tft.h"
 #include "indev.h"
 #include "config.h"
@@ -139,6 +140,9 @@ int main(void)
     printf("\n\n\nPICO USB Display\n");
 
     printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
+
+    usb_device_init();
+    while (!usb_is_configured());
 
     xToFlushQueue = xQueueCreate(2, sizeof(struct video_frame));
 

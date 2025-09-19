@@ -16,6 +16,8 @@ endif()
 
 set(PICO_DISPLAY_LIB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-display-lib)
 set(PICO_DISPLAY_LIB_CONFIG_PATH ${PICO_DISPLAY_LIB_PATH}/configs)
+set(CHERRY_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/CherryUSB)
+set(PUD_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
 
 # set the project name
 project(pico-usb-display C CXX ASM)
@@ -26,6 +28,7 @@ pico_sdk_init()
 # message(WARNING ${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
+add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
 
 add_executable(${PROJECT_NAME})
 
@@ -47,6 +50,7 @@ target_link_libraries(${PROJECT_NAME}
     # hardware_pwm
     hardware_clocks
     pico-display-lib
+    cherryusb_device
     FreeRTOS-Kernel-Heap3
 )
 
