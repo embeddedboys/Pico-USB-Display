@@ -19,9 +19,12 @@
 // OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#include <stdlib.h>
+
 // #include "udd.h"
 #include "tft.h"
 #include "decoder.h"
+#include "lz4.h"
 
 mutex_t decoder_mutex;
 uint16_t decoder_x, decoder_y;
@@ -131,6 +134,29 @@ void jpegdec_drawjpg(int x, int y, uint8_t *jpeg_data, uint32_t jpeg_size)
 		// );
 		JPEG_decode(&jpegdec->img, x, y, jpegdec->options);
 	}
+}
+
+void lz4_drawimg(int x, int y, uint8_t *lz4_data, uint32_t lz4_size)
+{
+	// printf("%s\n", __func__);
+	char *lz4_workspace;
+	int max_compressed_size = LZ4_compressBound(TFT_HOR_RES * TFT_VER_RES * 2);
+	// printf("%s, lz4 compreess boud: %d\n", __func__, max_compressed_size);
+
+	lz4_workspace = (char *)malloc(max_compressed_size);
+	if (lz4_workspace == NULL) {
+		printf("%s, malloc workspace failed!", __func__);
+		return;
+	}
+
+	int decompressed_size = LZ4_decompress_safe((char *)lz4_data, (char *)lz4_workspace, lz4_size, max_compressed_size);
+	// printf("%s, decompressed_size: %d\n", __func__, decompressed_size);
+	if (decompressed_size < 0)
+		goto decompress_failed;
+
+	tft_video_flush(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1, lz4_workspace, decompressed_size);
+decompress_failed:
+	free(lz4_workspace);
 }
 
 void decoder_set_xy(int x, int y)

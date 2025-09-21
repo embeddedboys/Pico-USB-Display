@@ -29,6 +29,7 @@
 
 #define DECODER_USE_TJPGD   0
 #define DECODER_USE_JPEGDEC 1
+#define DECODER_USE_LZ4     2
 
 #ifndef DECODER_TYPE
 	#define DECODER_TYPE DECODER_USE_JPEGDEC
@@ -40,14 +41,18 @@ extern uint16_t decoder_x, decoder_y;
 // extern JRESULT jd_getsize(uint16_t *w, uint16_t *h, const uint8_t jpeg_data[], uint32_t  data_size);
 // extern JRESULT jd_drawjpg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size);
 extern void jpegdec_drawjpg(int x, int y, uint8_t *jpeg_data, uint32_t jpeg_size);
+extern void lz4_drawimg(int x, int y, uint8_t *lz4_data, uint32_t lz4_size);
 
 extern void decoder_init(void);
 extern void decoder_set_xy(int x, int y);
 
 #if DECODER_TYPE == DECODER_USE_TJPGD
-	#define decoder_drawimg(x, y, b, l) jd_drawjpg(x, y, b, l)
+	#error "TJPGD decoder is unimplemented yet"
+	// #define decoder_drawimg(x, y, b, l) jd_drawjpg(x, y, b, l)
 #elif DECODER_TYPE == DECODER_USE_JPEGDEC
 	#define decoder_drawimg(x, y, b, l) jpegdec_drawjpg(x, y, b, l)
+#elif DECODER_TYPE == DECODER_USE_LZ4
+	#define decoder_drawimg(x, y, b, l) lz4_drawimg(x, y, b, l)
 #else
 	#error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */

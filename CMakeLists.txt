@@ -21,6 +21,7 @@ SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -Wl,--prin
 set(PICO_DISPLAY_LIB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-display-lib)
 set(PICO_DISPLAY_LIB_CONFIG_PATH ${PICO_DISPLAY_LIB_PATH}/configs)
 set(CHERRY_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/CherryUSB)
+set(LZ4_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/lz4)
 set(PUD_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/src)
 
 # set the project name
@@ -76,6 +77,7 @@ target_link_libraries(${PROJECT_NAME}
     pico-display-lib
     cherryusb_device
     jpegdec
+    lz4
     FreeRTOS-Kernel-Heap3
 )
 
