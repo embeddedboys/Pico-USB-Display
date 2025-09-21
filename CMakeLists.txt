@@ -31,13 +31,33 @@ pico_sdk_init()
 
 # message(WARNING ${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
+
+# All the public source files of this project
+set(PUD_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/main.c
+)
+
+# Include config files if exist
+include(${PUD_SOURCE_DIR}/decoders/config.cmake)
+
+# Add libs or source files in subdirs
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
 add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
+add_subdirectory(${PUD_SOURCE_DIR}/decoders)
+
+
+# Decoder selection
+# Note: This affects the decoding rate.
+#     |  Name    |  Format |
+#  0  |  tjpgd   |  jpeg   |
+#  1  | JPEGDEC  |  jpeg   |
+#  2  |  lz4     |  lz4    |
+set(DECODER_TYPE 1)
 
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
-    main.c
+    ${PUD_SOURCES}
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -55,8 +75,11 @@ target_link_libraries(${PROJECT_NAME}
     hardware_clocks
     pico-display-lib
     cherryusb_device
+    jpegdec
     FreeRTOS-Kernel-Heap3
 )
+
+target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 
 pico_enable_stdio_usb(${PROJECT_NAME} 0)
 pico_enable_stdio_uart(${PROJECT_NAME} 1)

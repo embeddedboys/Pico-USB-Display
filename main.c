@@ -45,7 +45,9 @@
 #include "indev.h"
 #include "config.h"
 #include "backlight.h"
-// #include "debug.h"
+#include "decoder.h"
+
+#include "bootlogo.h"
 
 u32 frame_counter = 0;
 QueueHandle_t xToFlushQueue = NULL;
@@ -53,6 +55,18 @@ QueueHandle_t xToFlushQueue = NULL;
 void vApplicationTickHook()
 {
 
+}
+
+static portTASK_FUNCTION(bootlogo_task_handler, pvParameters)
+{
+    decoder_drawimg(0, 0, (uint8_t *)bootlogo, sizeof(bootlogo));
+
+    busy_wait_ms(10);
+    backlight_driver_init();
+    backlight_set_level(100);
+    printf("backlight set to 100%%\n");
+
+    vTaskDelete(NULL);
 }
 
 #if !INDEV_DRV_NOT_USED
@@ -141,14 +155,20 @@ int main(void)
 
     printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
 
+    tft_driver_init();
+    backlight_driver_init();
     usb_device_init();
     while (!usb_is_configured());
 
     xToFlushQueue = xQueueCreate(2, sizeof(struct video_frame));
 
-    TaskHandle_t video_push_handler;
-    xTaskCreate(example_video_push_task, "video_push", 256, NULL, (tskIDLE_PRIORITY + 1), &video_push_handler);
-    vTaskCoreAffinitySet(video_push_handler, (1 << 0));
+    // TaskHandle_t video_push_handler;
+    // xTaskCreate(example_video_push_task, "video_push", 256, NULL, (tskIDLE_PRIORITY + 1), &video_push_handler);
+    // vTaskCoreAffinitySet(video_push_handler, (1 << 0));
+
+    TaskHandle_t bootlogo_handler;
+    xTaskCreate(bootlogo_task_handler, "bootlogo_task", 256, NULL, (tskIDLE_PRIORITY + 2), &bootlogo_handler);
+    vTaskCoreAffinitySet(bootlogo_handler, (1 << 1));
 
     TaskHandle_t video_flush_handler;
     xTaskCreate(video_flush_task, "video_flush", 256, NULL, (tskIDLE_PRIORITY + 2), &video_flush_handler);

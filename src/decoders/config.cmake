@@ -1,0 +1,3 @@
+list(APPEND PUD_SOURCES
+	${CMAKE_CURRENT_LIST_DIR}/decoder.c
+)
