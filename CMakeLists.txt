@@ -30,8 +30,10 @@ project(pico-usb-display C CXX ASM)
 # Initialize the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# message(WARNING ${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
+# **********  select the suitable config file  **********
 include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
+# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_yt350s006.cmake)
+# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
 
 # All the public source files of this project
 set(PUD_SOURCES
