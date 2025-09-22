@@ -85,13 +85,13 @@ portTASK_FUNCTION(example_indev_read_task, pvParameters)
 }
 #endif
 
-bool fps_timer_callback(struct repeating_timer *t)
+static portTASK_FUNCTION(usb_task_handler, pvParameters)
 {
-    u32 current_fps = frame_counter / (time_us_64() / 1000000);
-    u32 pixel_fillrate = (current_fps * TFT_HOR_RES * TFT_VER_RES) / 1000000;
-    printf("fps: %d\t", current_fps);
-    printf("Pixel Fillrate : %d MPixel/s\n", pixel_fillrate);
-    return true;
+    usb_device_init();
+
+    while (!usb_is_configured());
+
+    for(;;) tight_loop_contents();
 }
 
 portTASK_FUNCTION(example_video_push_task, pvParameters)
@@ -157,30 +157,30 @@ int main(void)
 
     tft_driver_init();
     backlight_driver_init();
-    usb_device_init();
-    while (!usb_is_configured());
+    decoder_init();
 
-    xToFlushQueue = xQueueCreate(2, sizeof(struct video_frame));
+    xToFlushQueue = xQueueCreate(1, sizeof(struct video_frame));
 
     // TaskHandle_t video_push_handler;
     // xTaskCreate(example_video_push_task, "video_push", 256, NULL, (tskIDLE_PRIORITY + 1), &video_push_handler);
     // vTaskCoreAffinitySet(video_push_handler, (1 << 0));
 
+    TaskHandle_t usb_handler;
+    xTaskCreate(usb_task_handler, "usb_task", 256, NULL, (tskIDLE_PRIORITY + 3), &usb_handler);
+    vTaskCoreAffinitySet(usb_handler, (1 << 0));
+
     TaskHandle_t bootlogo_handler;
     xTaskCreate(bootlogo_task_handler, "bootlogo_task", 256, NULL, (tskIDLE_PRIORITY + 2), &bootlogo_handler);
     vTaskCoreAffinitySet(bootlogo_handler, (1 << 1));
 
-    TaskHandle_t video_flush_handler;
-    xTaskCreate(video_flush_task, "video_flush", 256, NULL, (tskIDLE_PRIORITY + 2), &video_flush_handler);
-    vTaskCoreAffinitySet(video_flush_handler, (1 << 1));
+    // TaskHandle_t video_flush_handler;
+    // xTaskCreate(video_flush_task, "video_flush", 256, NULL, (tskIDLE_PRIORITY + 2), &video_flush_handler);
+    // vTaskCoreAffinitySet(video_flush_handler, (1 << 1));
 
 #if !INDEV_DRV_NOT_USED
     TaskHandle_t indev_handler;
     xTaskCreate(example_indev_read_task, "indev_read", 256, NULL, (tskIDLE_PRIORITY + 0), &indev_handler);
 #endif
-
-    struct repeating_timer fps_timer;
-    add_repeating_timer_ms(2000, fps_timer_callback, NULL, &fps_timer);
 
     printf("calling freertos scheduler, %lld\n", time_us_64());
     vTaskStartScheduler();

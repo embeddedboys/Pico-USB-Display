@@ -2,7 +2,7 @@
 #include "usbd_core.h"
 #include "usbd_vendor.h"
 
-// #include "decoder.h"
+#include "decoder.h"
 // #include "udd.h"
 
 static const uint8_t *device_descriptor_callback(uint8_t speed)
@@ -51,14 +51,14 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
     switch (setup->bRequest) {
         case REQ_EP1_OUT:
             // usb_hexdump(*data, *len);
-            // memcpy(&x, *data, sizeof(x));
-            // (*data)+=2;
+            memcpy(&x, *data, sizeof(x));
+            (*data)+=2;
 
-            // memcpy(&y, *data, sizeof(y));
-            // (*data)+=2;
-            // decoder_set_xy(x, y);
+            memcpy(&y, *data, sizeof(y));
+            (*data)+=2;
+            decoder_set_xy(x, y);
 
-            // memcpy(&transfer_size, *data, sizeof(transfer_size));
+            memcpy(&transfer_size, *data, sizeof(transfer_size));
             // USB_LOG_WRN("%s, req_ep1_out, x : 0x%04x, y : 0x%04x, size : %d\n",
             //                     __func__, decoder_x, decoder_y, transfer_size);
             return usbd_ep_start_read(busid, EP1_OUT_ADDR, ep1_read_buffer, transfer_size);
