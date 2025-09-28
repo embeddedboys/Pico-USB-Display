@@ -27,7 +27,8 @@
 #include "lz4.h"
 
 mutex_t decoder_mutex;
-uint16_t decoder_x, decoder_y;
+uint16_t decoder_xs, decoder_ys;
+uint16_t decoder_xe, decoder_ye;
 
 /* for TJPGD lib */
 // uint8_t workspace[TJPGD_WORKSPACE_SIZE] __attribute__((aligned(4)));
@@ -76,7 +77,7 @@ uint16_t decoder_x, decoder_y;
 // 	return jresult;
 // }
 
-// JRESULT jd_drawjpg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size)
+// JRESULT jd_drawimg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size)
 // {
 // 	struct tjpgd_data *tjpgd = &g_udd_data.tjpgd;
 // 	JRESULT jresult = JDR_OK;
@@ -98,6 +99,7 @@ uint16_t decoder_x, decoder_y;
 
 // 	return jresult;
 // }
+
 struct jpegdec_data {
 	JPEGIMAGE img;
 	u8 options;
@@ -116,7 +118,7 @@ int draw_mcus(JPEGDRAW *pDraw)
 	return iCount;
 }
 
-void jpegdec_drawjpg(int x, int y, uint8_t *jpeg_data, uint32_t jpeg_size)
+void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *jpeg_data, uint32_t jpeg_size)
 {
 	static struct jpegdec_data *jpegdec = &g_jpegdec;
 	int ret;
@@ -132,16 +134,16 @@ void jpegdec_drawjpg(int x, int y, uint8_t *jpeg_data, uint32_t jpeg_size)
 		// 	JPEG_getOrientation(&jpegdec->img),
 		// 	JPEG_getBpp(&jpegdec->img)
 		// );
-		JPEG_decode(&jpegdec->img, x, y, jpegdec->options);
+		JPEG_decode(&jpegdec->img, xs, ys, jpegdec->options);
 	}
 }
 
-void lz4_drawimg(int x, int y, uint8_t *lz4_data, uint32_t lz4_size)
+void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *lz4_data, uint32_t lz4_size)
 {
-	// printf("%s\n", __func__);
+	printf("%s, size :%d\n", __func__, lz4_size);
 	char *lz4_workspace;
 	int max_compressed_size = LZ4_compressBound(TFT_HOR_RES * TFT_VER_RES * 2);
-	// printf("%s, lz4 compreess boud: %d\n", __func__, max_compressed_size);
+	printf("%s, lz4 compreess boud: %d\n", __func__, max_compressed_size);
 
 	lz4_workspace = (char *)malloc(max_compressed_size);
 	if (lz4_workspace == NULL) {
@@ -150,27 +152,41 @@ void lz4_drawimg(int x, int y, uint8_t *lz4_data, uint32_t lz4_size)
 	}
 
 	int decompressed_size = LZ4_decompress_safe((char *)lz4_data, (char *)lz4_workspace, lz4_size, max_compressed_size);
-	// printf("%s, decompressed_size: %d\n", __func__, decompressed_size);
+	printf("%s, decompressed_size: %d\n", __func__, decompressed_size);
 	if (decompressed_size < 0)
 		goto decompress_failed;
 
-	tft_video_flush(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1, lz4_workspace, decompressed_size);
+	tft_video_flush(xs, ys, xe, ye, lz4_workspace, decompressed_size);
 decompress_failed:
 	free(lz4_workspace);
 }
 
-void decoder_set_xy(int x, int y)
+void decoder_set_xy(uint16_t x, uint16_t y)
 {
 	mutex_enter_blocking(&decoder_mutex);
-	decoder_x = x;
-	decoder_y = y;
+	decoder_xs = x;
+	decoder_ys = y;
 	mutex_exit(&decoder_mutex);
 }
+
+void decoder_set_window(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye)
+{
+	mutex_enter_blocking(&decoder_mutex);
+	decoder_xs = xs;
+	decoder_ys = ys;
+	decoder_xe = xe;
+	decoder_ye = ye;
+	mutex_exit(&decoder_mutex);
+}
+
+static char *decoder_names[] = {
+	"tjpgd",
+	"JPEGDEC",
+	"LZ4"
+};
 
 void decoder_init(void)
 {
 	mutex_init(&decoder_mutex);
-
-	decoder_x = 0;
-	decoder_y = 0;
+	printf("Decoder type: %s\n", decoder_names[DECODER_TYPE]);
 }

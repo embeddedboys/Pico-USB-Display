@@ -35,24 +35,28 @@
 	#define DECODER_TYPE DECODER_USE_JPEGDEC
 #endif
 
+typedef unsigned short u16;
+
 extern mutex_t decoder_mutex;
-extern uint16_t decoder_x, decoder_y;
+extern uint16_t decoder_xs, decoder_ys;
+extern uint16_t decoder_xe, decoder_ye;
 
 // extern JRESULT jd_getsize(uint16_t *w, uint16_t *h, const uint8_t jpeg_data[], uint32_t  data_size);
-// extern JRESULT jd_drawjpg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size);
-extern void jpegdec_drawjpg(int x, int y, uint8_t *jpeg_data, uint32_t jpeg_size);
-extern void lz4_drawimg(int x, int y, uint8_t *lz4_data, uint32_t lz4_size);
+// extern JRESULT jd_drawimg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size);
+extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *jpeg_data, uint32_t jpeg_size);
+extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *lz4_data, uint32_t lz4_size);
 
 extern void decoder_init(void);
-extern void decoder_set_xy(int x, int y);
+extern void decoder_set_xy(u16 x, u16 y);
+extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
 
 #if DECODER_TYPE == DECODER_USE_TJPGD
 	#error "TJPGD decoder is unimplemented yet"
-	// #define decoder_drawimg(x, y, b, l) jd_drawjpg(x, y, b, l)
+	// #define decoder_drawimg(xs, ys, xe, ye, b, l) jd_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_JPEGDEC
-	#define decoder_drawimg(x, y, b, l) jpegdec_drawjpg(x, y, b, l)
+	#define decoder_drawimg(xs, ys, xe, ye, b, l) jpegdec_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_LZ4
-	#define decoder_drawimg(x, y, b, l) lz4_drawimg(x, y, b, l)
+	#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
 #else
 	#error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */

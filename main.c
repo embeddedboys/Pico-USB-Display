@@ -59,7 +59,8 @@ void vApplicationTickHook()
 
 static portTASK_FUNCTION(bootlogo_task_handler, pvParameters)
 {
-    decoder_drawimg(0, 0, (uint8_t *)bootlogo, sizeof(bootlogo));
+    decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
+                    (uint8_t *)bootlogo, sizeof(bootlogo));
 
     busy_wait_ms(10);
     backlight_driver_init();
