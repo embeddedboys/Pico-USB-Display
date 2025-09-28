@@ -1,6 +1,4 @@
 #include "usb.h"
-
-// #include "udd.h"
 #include "decoder.h"
 
 void usbd_event_handler(uint8_t busid, uint8_t event)
@@ -28,9 +26,9 @@ void usbd_event_handler(uint8_t busid, uint8_t event)
 	}
 }
 
-extern uint8_t ep1_read_buffer[65536];
-extern uint8_t ep2_write_buffer[128];
-extern uint8_t ep4_write_buffer[128];
+extern uint8_t ep1_read_buffer[EP1_RD_BUF_SIZE];
+extern uint8_t ep2_write_buffer[EP2_WR_BUF_SIZE];
+extern uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
 extern uint32_t frame_counter;
 
 void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
@@ -39,7 +37,7 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 		return;
 
 	mutex_enter_blocking(&decoder_mutex);
-	decoder_drawimg(decoder_x, decoder_y, ep1_read_buffer, nbytes);
+	decoder_drawimg(decoder_xs, decoder_ys, decoder_xe, decoder_ye, ep1_read_buffer, nbytes);
 	mutex_exit(&decoder_mutex);
 }
 

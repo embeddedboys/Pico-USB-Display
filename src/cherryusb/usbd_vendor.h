@@ -26,6 +26,10 @@ extern "C" {
 #define REQ_EP3_OUT     0X04
 #define REQ_EP4_IN      0X05
 
+#define EP1_RD_BUF_SIZE 131072
+#define EP2_WR_BUF_SIZE 128
+#define EP4_WR_BUF_SIZE 128
+
 static const uint8_t device_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0, 0, 0, VENDOR_ID, PRODUCT_ID, 0, 1),
 };

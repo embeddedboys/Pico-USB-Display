@@ -1,9 +1,7 @@
-#include "usb.h"
 #include "usbd_core.h"
 #include "usbd_vendor.h"
 
 #include "decoder.h"
-// #include "udd.h"
 
 static const uint8_t *device_descriptor_callback(uint8_t speed)
 {
@@ -22,9 +20,9 @@ static const uint8_t *device_quality_descriptor_callback(uint8_t speed)
 
 static const char *string_descriptor_callback(uint8_t speed, uint8_t index)
 {
-	if (index > 3) {
+	if (index > 3)
 		return NULL;
-	}
+
 	return string_descriptors[index];
 }
 
@@ -35,9 +33,9 @@ const struct usb_descriptor xxx_vendor_descriptor = {
 	.string_descriptor_callback = string_descriptor_callback
 };
 
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep1_read_buffer[65536];
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep2_write_buffer[128];
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep4_write_buffer[128];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep1_read_buffer[EP1_RD_BUF_SIZE];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep2_write_buffer[EP2_WR_BUF_SIZE];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
 
 static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup, uint8_t **data, uint32_t *len)
 {
@@ -45,18 +43,25 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
     //              "bRequest 0x%02x\r\n",
     //              __func__,
     //              setup->bRequest);
-    uint16_t transfer_size;
-    int x, y;
+    uint32_t transfer_size;
+    int xs, ys, xe, ye;
 
     switch (setup->bRequest) {
         case REQ_EP1_OUT:
             // usb_hexdump(*data, *len);
-            memcpy(&x, *data, sizeof(x));
+            memcpy(&xs, *data, sizeof(xs));
             (*data)+=2;
 
-            memcpy(&y, *data, sizeof(y));
+            memcpy(&ys, *data, sizeof(ys));
             (*data)+=2;
-            decoder_set_xy(x, y);
+
+            memcpy(&xe, *data, sizeof(xe));
+            (*data)+=2;
+
+            memcpy(&ye, *data, sizeof(ye));
+            (*data)+=2;
+
+            decoder_set_window(xs, ys, xe, ye);
 
             memcpy(&transfer_size, *data, sizeof(transfer_size));
             // USB_LOG_WRN("%s, req_ep1_out, x : 0x%04x, y : 0x%04x, size : %d\n",
