@@ -42,6 +42,17 @@ def swap(a, b):
     b = tmp
     return a, b
 
+def create_ep1_control_buffer(xs, ys, xe, ye, size) -> list:
+    # print(f"xs: {xs}, ys: {ys}, xe: {xe}, ye: {ye}, size: {size}")
+    return [
+        xs & 0xff, (xs >> 8) & 0xff,
+        ys & 0xff, (ys >> 8) & 0xff,
+        xe & 0xff, (xe >> 8) & 0xff,
+        ye & 0xff, (ye >> 8) & 0xff,
+        (size >> 16) & 0xFF, (size >> 24) & 0xFF,
+        size & 0xFF, (size >> 8) & 0xFF
+    ]
+
 def main():
     TARGET_WIDTH = 480
     TARGET_HEIGHT = 320
@@ -81,7 +92,7 @@ def main():
 
         size = len(pic)
         print(f"dst image size : {hor_res}x{ver_res},", size, "(Bytes)")
-        control_buffer = [(x & 0xff), (x >> 8), (y & 0xff), (y >> 8), size & 0xFF, (size >> 8) & 0xFF]
+        control_buffer = create_ep1_control_buffer(x, y, x + hor_res - 1, y + ver_res - 1, size)
         dev = usb.core.find(idVendor=0x2E8A, idProduct=0x0001)
         if dev is None:
             raise ValueError('Device not found')
