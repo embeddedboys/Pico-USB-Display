@@ -50,7 +50,7 @@
 #include "bootlogo.h"
 
 u32 frame_counter = 0;
-QueueHandle_t xToFlushQueue = NULL;
+// QueueHandle_t xToFlushQueue = NULL;
 
 void vApplicationTickHook()
 {
@@ -95,39 +95,6 @@ static portTASK_FUNCTION(usb_task_handler, pvParameters)
     for(;;) tight_loop_contents();
 }
 
-portTASK_FUNCTION(example_video_push_task, pvParameters)
-{
-#define CUBE_X_SIZE (TFT_HOR_RES / 3 * 2)
-#define CUBE_Y_SIZE (TFT_VER_RES / 3 * 2)
-    static uint16_t video_memory[CUBE_X_SIZE * CUBE_Y_SIZE] = {0};
-    static struct video_frame vf = {
-        .len = sizeof(video_memory),
-        .vmem = video_memory,
-        .xs = TFT_HOR_RES / 2 - (CUBE_X_SIZE / 2),
-        .xe = TFT_HOR_RES / 2 + (CUBE_X_SIZE / 2) - 1,
-        .ys = TFT_VER_RES / 2 - (CUBE_Y_SIZE / 2),
-        .ye = TFT_VER_RES / 2 + (CUBE_Y_SIZE / 2) - 1,
-    };
-
-    tft_driver_init();
-    backlight_driver_init();
-
-    tft_fill_color(0x0);
-    backlight_set_level(100);
-
-    printf("going to video push loop\n");
-    /* Non buffered, flush pixel by pixel */
-    // for (uint16_t color = 0;; color+=255)
-    //     tft_fill_color(color);
-
-    for (;;) {
-        memset(video_memory, (rand() % 255), sizeof(video_memory));
-        tft_async_video_push(&vf);
-    }
-
-    vTaskDelete(NULL);
-}
-
 int main(void)
 {
     /* NOTE: DO NOT MODIFY THIS BLOCK */
@@ -160,8 +127,7 @@ int main(void)
     backlight_driver_init();
     decoder_init();
 
-    xToFlushQueue = xQueueCreate(1, sizeof(struct video_frame));
-
+    // xToFlushQueue = xQueueCreate(1, sizeof(struct video_frame));
     // TaskHandle_t video_push_handler;
     // xTaskCreate(example_video_push_task, "video_push", 256, NULL, (tskIDLE_PRIORITY + 1), &video_push_handler);
     // vTaskCoreAffinitySet(video_push_handler, (1 << 0));
@@ -173,10 +139,6 @@ int main(void)
     TaskHandle_t bootlogo_handler;
     xTaskCreate(bootlogo_task_handler, "bootlogo_task", 256, NULL, (tskIDLE_PRIORITY + 2), &bootlogo_handler);
     vTaskCoreAffinitySet(bootlogo_handler, (1 << 1));
-
-    // TaskHandle_t video_flush_handler;
-    // xTaskCreate(video_flush_task, "video_flush", 256, NULL, (tskIDLE_PRIORITY + 2), &video_flush_handler);
-    // vTaskCoreAffinitySet(video_flush_handler, (1 << 1));
 
 #if !INDEV_DRV_NOT_USED
     TaskHandle_t indev_handler;
