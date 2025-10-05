@@ -32,6 +32,7 @@ pico_sdk_init()
 
 # **********  select the suitable config file  **********
 include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
+# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728_8bit.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_yt350s006.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
