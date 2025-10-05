@@ -38,7 +38,7 @@ import datetime
 FRAMES_DIR = "/tmp/pud_frames"
 
 # Maximum length of binary data to be transmitted
-MAX_LENGTH = 40000
+MAX_LENGTH = 65536
 
 EP_DIR_OUT = 0x00
 EP_DIR_IN = 0X80
@@ -166,8 +166,8 @@ def main():
             i = 0
         pic = media_binaries[i]
 
-        if len(pic) % 2 != 0:
-            pic = pic + b'\xff'
+        # if len(pic) % 2 != 0:
+        #     pic = pic + b'\xff'
         size = len(pic)
 
         # make a control transfer
