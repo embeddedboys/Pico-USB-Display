@@ -1,4 +1,6 @@
 build-pico2
+build-pico
 build
 .cache
 __pycache__
+.venv
