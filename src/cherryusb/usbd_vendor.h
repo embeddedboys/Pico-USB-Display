@@ -68,6 +68,7 @@ static const char *string_descriptors[] = {
 extern const struct usb_descriptor xxx_vendor_descriptor;
 
 struct usbd_interface *usbd_vendor_init_intf(uint8_t busid, struct usbd_interface *intf);
+void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
 
 #ifdef __cplusplus
 }
