@@ -118,7 +118,7 @@ int draw_mcus(JPEGDRAW *pDraw)
 	return iCount;
 }
 
-void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *jpeg_data, uint32_t jpeg_size)
+void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 {
 	static struct jpegdec_data *jpegdec = &g_jpegdec;
 	int ret;
@@ -138,7 +138,7 @@ void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *jpeg_data, uint32_
 	}
 }
 
-void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *lz4_data, uint32_t lz4_size)
+void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 {
 	printf("%s, size :%d\n", __func__, lz4_size);
 	char *lz4_workspace;
@@ -161,7 +161,7 @@ decompress_failed:
 	free(lz4_workspace);
 }
 
-void decoder_set_xy(uint16_t x, uint16_t y)
+void decoder_set_xy(u16 x, u16 y)
 {
 	mutex_enter_blocking(&decoder_mutex);
 	decoder_xs = x;
@@ -169,7 +169,7 @@ void decoder_set_xy(uint16_t x, uint16_t y)
 	mutex_exit(&decoder_mutex);
 }
 
-void decoder_set_window(uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye)
+void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
 {
 	mutex_enter_blocking(&decoder_mutex);
 	decoder_xs = xs;

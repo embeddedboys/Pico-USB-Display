@@ -35,7 +35,9 @@
 	#define DECODER_TYPE DECODER_USE_JPEGDEC
 #endif
 
+typedef unsigned char u8;
 typedef unsigned short u16;
+typedef unsigned int u32;
 
 extern mutex_t decoder_mutex;
 extern uint16_t decoder_xs, decoder_ys;
@@ -43,8 +45,8 @@ extern uint16_t decoder_xe, decoder_ye;
 
 // extern JRESULT jd_getsize(uint16_t *w, uint16_t *h, const uint8_t jpeg_data[], uint32_t  data_size);
 // extern JRESULT jd_drawimg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size);
-extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *jpeg_data, uint32_t jpeg_size);
-extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, uint8_t *lz4_data, uint32_t lz4_size);
+extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
+extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size);
 
 extern void decoder_init(void);
 extern void decoder_set_xy(u16 x, u16 y);
