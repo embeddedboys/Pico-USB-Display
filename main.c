@@ -116,7 +116,8 @@ int main(void)
                     CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
                     CPU_SPEED_MHZ * MHZ,
                     CPU_SPEED_MHZ * MHZ);
-    stdio_uart_init_full(uart0, 115200, 16, 17);
+    stdio_uart_init_full(debug_uart, DEBUG_UART_SPEED,
+    			DEBUG_UART_TX_PIN, DEBUG_UART_RX_PIN);
     // stdio_uart_init();
 
     printf("\n\n\nPICO USB Display\n");
