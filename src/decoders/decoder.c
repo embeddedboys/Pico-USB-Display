@@ -108,7 +108,8 @@ struct jpegdec_data g_jpegdec;
 
 int draw_mcus(JPEGDRAW *pDraw)
 {
-	int iCount = pDraw->iWidth * pDraw->iHeight * 2;  /* sizeof(*pDraw->pPixels) */
+	int iCount = pDraw->iWidth * pDraw->iHeight *
+		     2; /* sizeof(*pDraw->pPixels) */
 	int xs = pDraw->x;
 	int ys = pDraw->y;
 	int xe = pDraw->x + pDraw->iWidth - 1;
@@ -118,7 +119,8 @@ int draw_mcus(JPEGDRAW *pDraw)
 	return iCount;
 }
 
-void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
+void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
+		     u32 jpeg_size)
 {
 	static struct jpegdec_data *jpegdec = &g_jpegdec;
 	int ret;
@@ -142,7 +144,8 @@ void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 {
 	printf("%s, size :%d\n", __func__, lz4_size);
 	char *lz4_workspace;
-	int max_compressed_size = LZ4_compressBound(TFT_HOR_RES * TFT_VER_RES * 2);
+	int max_compressed_size =
+		LZ4_compressBound(TFT_HOR_RES * TFT_VER_RES * 2);
 	printf("%s, lz4 compreess boud: %d\n", __func__, max_compressed_size);
 
 	lz4_workspace = (char *)malloc(max_compressed_size);
@@ -151,7 +154,9 @@ void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 		return;
 	}
 
-	int decompressed_size = LZ4_decompress_safe((char *)lz4_data, (char *)lz4_workspace, lz4_size, max_compressed_size);
+	int decompressed_size =
+		LZ4_decompress_safe((char *)lz4_data, (char *)lz4_workspace,
+				    lz4_size, max_compressed_size);
 	printf("%s, decompressed_size: %d\n", __func__, decompressed_size);
 	if (decompressed_size < 0)
 		goto decompress_failed;
@@ -179,11 +184,7 @@ void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
 	mutex_exit(&decoder_mutex);
 }
 
-static char *decoder_names[] = {
-	"tjpgd",
-	"JPEGDEC",
-	"LZ4"
-};
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4" };
 
 void decoder_init(void)
 {

@@ -4,25 +4,25 @@
 void usbd_event_handler(uint8_t busid, uint8_t event)
 {
 	switch (event) {
-		case USBD_EVENT_RESET:
-			break;
-		case USBD_EVENT_CONNECTED:
-			break;
-		case USBD_EVENT_DISCONNECTED:
-			break;
-		case USBD_EVENT_RESUME:
-			break;
-		case USBD_EVENT_SUSPEND:
-			break;
-		case USBD_EVENT_CONFIGURED:
-			break;
-		case USBD_EVENT_SET_REMOTE_WAKEUP:
-			break;
-		case USBD_EVENT_CLR_REMOTE_WAKEUP:
-			break;
-		default:
-			// USB_LOG_WRN("Unhandled event : %d, bus id : %d\n", event, busid);
-			break;
+	case USBD_EVENT_RESET:
+		break;
+	case USBD_EVENT_CONNECTED:
+		break;
+	case USBD_EVENT_DISCONNECTED:
+		break;
+	case USBD_EVENT_RESUME:
+		break;
+	case USBD_EVENT_SUSPEND:
+		break;
+	case USBD_EVENT_CONFIGURED:
+		break;
+	case USBD_EVENT_SET_REMOTE_WAKEUP:
+		break;
+	case USBD_EVENT_CLR_REMOTE_WAKEUP:
+		break;
+	default:
+		// USB_LOG_WRN("Unhandled event : %d, bus id : %d\n", event, busid);
+		break;
 	}
 }
 
@@ -37,18 +37,19 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 		return;
 
 	mutex_enter_blocking(&decoder_mutex);
-	decoder_drawimg(decoder_xs, decoder_ys, decoder_xe, decoder_ye, ep1_read_buffer, nbytes);
+	decoder_drawimg(decoder_xs, decoder_ys, decoder_xe, decoder_ye,
+			ep1_read_buffer, nbytes);
 	mutex_exit(&decoder_mutex);
 }
 
 void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 {
 	switch (cmd) {
-		case 0x01:
-			// memcpy(ep2_write_buffer, g_udd_data.sn, len);
-			break;
-		default:
-			break;
+	case 0x01:
+		// memcpy(ep2_write_buffer, g_udd_data.sn, len);
+		break;
+	default:
+		break;
 	}
 }
 
