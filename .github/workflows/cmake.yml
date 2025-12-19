@@ -13,7 +13,7 @@ jobs:
                 strategy:
                         fail-fast: false
                         matrix:
-                                board: ["pico", "pico2_w"]
+                                board: ["pico", "pico2"]
 
                 steps:
                         - name: Clean workspace
@@ -59,7 +59,7 @@ jobs:
                           # access regardless of the host operating system
                           shell: bash
                           working-directory: ${{github.workspace}}/pud/build.${{ matrix.board }}
-                          run: PICO_SDK_PATH=../../pico-sdk cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DPICO_BOARD=${{ matrix.board }} -DWIFI_SSID=TestSSID -DWIFI_PASSWORD=TestPassword
+                          run: PICO_SDK_PATH=../../pico-sdk cmake .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DPICO_BOARD=${{ matrix.board }} #-DWIFI_SSID=TestSSID -DWIFI_PASSWORD=TestPassword
 
                         - name: Get core count
                           id: core_count
