@@ -36,7 +36,7 @@ jobs:
 
                         - name: Checkout pico-sdk submodules
                           working-directory: ${{github.workspace}}/pico-sdk
-                          run: github submodule update --init
+                          run: git submodule update --init
 
                         - name: Checkout This project submodules
                           working-directory: ${{github.workspace}}/pud
