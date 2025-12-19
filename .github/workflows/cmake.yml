@@ -30,7 +30,7 @@ jobs:
                         - name: Checkout pico-sdk/develop
                           uses: actions/checkout@v4
                           with:
-                                  repository: raspberry/pico-sdk
+                                  repository: raspberrypi/pico-sdk
                                   ref: develop
                                   path: pico-sdk
 
