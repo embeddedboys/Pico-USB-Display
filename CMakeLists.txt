@@ -40,6 +40,7 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # All the public source files of this project
 set(PUD_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/main.c
+    ${PUD_SOURCE_DIR}/pud.c
 )
 
 # Include config files if exist
@@ -73,6 +74,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME}
     pico_stdlib
     # pico_multicore
+    pico_unique_id
     pico_bootsel_via_double_reset
     # hardware_i2c
     # hardware_spi

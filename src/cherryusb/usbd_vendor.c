@@ -47,8 +47,8 @@ struct req_ep1_out {
 };
 
 struct req_ep2_in {
-	u8 cmd;
-	u32 size;
+	u16 cmd;
+	u16 size;
 };
 
 static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
@@ -74,7 +74,10 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 		return usbd_ep_start_read(busid, EP1_OUT_ADDR, ep1_read_buffer,
 					  req_ep1_out->size);
 	case REQ_EP2_IN:
+		usb_hexdump(*data, *len);
 		req_ep2_in = (struct req_ep2_in *)*data;
+		USB_LOG_WRN("cmd: %d, size: %d\n", req_ep2_in->cmd,
+			    req_ep2_in->size);
 		usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd, req_ep2_in->size);
 		return usbd_ep_start_write(busid, EP2_IN_ADDR, ep2_write_buffer,
 					   req_ep2_in->size);

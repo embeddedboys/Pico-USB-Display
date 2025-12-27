@@ -40,14 +40,8 @@
 #include "task.h"
 #include "semphr.h"
 
-#include "usb.h"
-#include "tft.h"
-#include "indev.h"
-#include "config.h"
-#include "backlight.h"
-#include "decoder.h"
-
 #include "bootlogo.h"
+#include "pud.h"
 
 u32 frame_counter = 0;
 // QueueHandle_t xToFlushQueue = NULL;
@@ -62,7 +56,6 @@ static portTASK_FUNCTION(bootlogo_task_handler, pvParameters)
 			(uint8_t *)bootlogo, sizeof(bootlogo));
 
 	busy_wait_ms(10);
-	backlight_driver_init();
 	backlight_set_level(100);
 	printf("backlight set to 100%%\n");
 
@@ -120,15 +113,11 @@ int main(void)
 			CPU_SPEED_MHZ * MHZ, CPU_SPEED_MHZ * MHZ);
 	stdio_uart_init_full(debug_uart, DEBUG_UART_SPEED, DEBUG_UART_TX_PIN,
 			     DEBUG_UART_RX_PIN);
-	// stdio_uart_init();
 
 	printf("\n\n\nPICO USB Display\n");
-
 	printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
 
-	tft_driver_init();
-	backlight_driver_init();
-	decoder_init();
+	pud_init();
 
 	// xToFlushQueue = xQueueCreate(1, sizeof(struct video_frame));
 	// TaskHandle_t video_push_handler;

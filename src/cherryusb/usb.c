@@ -1,3 +1,4 @@
+#include "pud.h"
 #include "usb.h"
 #include "decoder.h"
 
@@ -29,7 +30,6 @@ void usbd_event_handler(uint8_t busid, uint8_t event)
 extern uint8_t ep1_read_buffer[EP1_RD_BUF_SIZE];
 extern uint8_t ep2_write_buffer[EP2_WR_BUF_SIZE];
 extern uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
-extern uint32_t frame_counter;
 
 void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
@@ -44,9 +44,10 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 
 void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 {
+	pud_set_rw_cmd(&cmd, len);
 	switch (cmd) {
-	case 0x01:
-		// memcpy(ep2_write_buffer, g_udd_data.sn, len);
+	case pud_CMD_GET_SN:
+		pud_get_ro_sn(ep2_write_buffer, len);
 		break;
 	default:
 		break;
