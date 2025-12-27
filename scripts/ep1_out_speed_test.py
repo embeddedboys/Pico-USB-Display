@@ -25,9 +25,22 @@ buffer = bytearray((i % 10) + 0x30 for i in range(size))
 
 x = 400
 y = 300
+xres = 480
+yres = 320
 print(x, y, hex(x), hex(y))
 
-control_buffer = [(x & 0xff), (x >> 8), (y & 0xff), (y >> 8), size & 0xFF, (size >> 8) & 0xFF]
+def create_ep1_control_buffer(xs, ys, xe, ye, size) -> list:
+    # print(f"xs: {xs}, ys: {ys}, xe: {xe}, ye: {ye}, size: {size}")
+    return [
+        xs & 0xff, (xs >> 8) & 0xff,
+        ys & 0xff, (ys >> 8) & 0xff,
+        xe & 0xff, (xe >> 8) & 0xff,
+        ye & 0xff, (ye >> 8) & 0xff,
+        (size >> 16) & 0xFF, (size >> 24) & 0xFF,
+        size & 0xFF, (size >> 8) & 0xFF
+    ]
+
+control_buffer = create_ep1_control_buffer(x, y, x + xres - 1, y + yres - 1, size)
 print(control_buffer, len(buffer))
 
 for i in range(repeat):
