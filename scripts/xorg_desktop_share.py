@@ -5,6 +5,10 @@
 #
 # Copyright (c) 2020 Raspberry Pi (Trading) Ltd. author of https://github.com/raspberrypi/pico-examples/tree/master/usb
 #
+# Copyright (c) 2025 Liyulingyue
+# 
+# Copyright (c) 2025-2026 Wooden Chair <hua.zheng@embeddedboys.com>
+#
 # SPDX-License-Identifier: BSD-3-Clause
 #
 
