@@ -43,7 +43,7 @@ struct disp_data {
 	u16	xres;
 	u16	yres;
 	u8	rotation;
-	u16	pixelclock_khz;
+	u32	pixelclock_khz;
 	u8	bpp;
 	u8	intf_type;
 };
