@@ -8,6 +8,8 @@ Pico USB Display
 
 <!-- (put a preview video here) -->
 
+https://github.com/user-attachments/assets/9541297a-1a50-4cca-b3d9-013d84244e89
+
 ![desktop_xfce](./assets/xfce.jpg)
 
 ## 特性
