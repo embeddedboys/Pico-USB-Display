@@ -10,6 +10,8 @@ Pico USB Display
 
 https://github.com/user-attachments/assets/9541297a-1a50-4cca-b3d9-013d84244e89
 
+https://github.com/user-attachments/assets/7fa16b4b-5ea4-4122-a23e-d53f6be5380d
+
 ![desktop_xfce](./assets/xfce.jpg)
 
 ## 特性
@@ -152,6 +154,18 @@ sudo insmod pud.ko
 ffplay ./jazz.mp4
 ```
 
+## 本项目使用的开源软件
+
+- [FreeRTOS-Kernel](https://github.com/FreeRTOS/FreeRTOS-Kernel)
+- [bitbank2/JPEGENC](https://github.com/bitbank2/JPEGENC)
+- [bitbank2/JPEGDEC](https://github.com/bitbank2/JPEGDEC)
+- [dgatf/usb_library_rp2040](https://github.com/dgatf/usb_library_rp2040)
+- [cherry-embedded/CherryUSB](https://github.com/cherry-embedded/CherryUSB)
+- [Bodmer/TJpg_Decoder](https://github.com/Bodmer/TJpg_Decoder)
+- [embeddedboys/pico_dm_qd3503728_freertos](https://github.com/embeddedboys/pico_dm_qd3503728_freertos)
+
 ## 链接
 
 - [PUD-kernel-drivers - Pico USB Display 的 DRM 驱动程序](https://github.com/embeddedboys/PUD-kernel-drivers)
+
+- [A USB display device based on Raspberry Pi Pico & Pico_DM_QD3503728.](https://github.com/embeddedboys/pico_dm_qd3503728_udd)

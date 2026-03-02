@@ -10,6 +10,8 @@ If not, you might be interested in this project.
 
 https://github.com/user-attachments/assets/9541297a-1a50-4cca-b3d9-013d84244e89
 
+https://github.com/user-attachments/assets/7fa16b4b-5ea4-4122-a23e-d53f6be5380d
+
 ![desktop_xfce](./assets/xfce.jpg)
 
 ## Features
