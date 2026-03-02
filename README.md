@@ -1,32 +1,34 @@
 Pico USB Display
 ============================
 
-Have you ever considered using your Pico board as a display device?
-If not, you might be interested in this project.
+[中文](./README.md) | [English](./README.en.md)
+
+您是否考虑过使用 Pico 开发板作为显示设备？
+如果没有，您可能会对这个项目感兴趣。
 
 <!-- (put a preview video here) -->
 
 ![desktop_xfce](./assets/xfce.jpg)
 
-## Features
+## 特性
 
-- 🚀 Easy to use (A Pico board and TFT Display with some jumper wires)
-- 📦 Supports multiple platforms (Linux, Windows, macOS)
+- 🚀 易于使用（一块 Pico 开发板和 TFT 显示器，加上一些杜邦线）
+- 📦 支持多平台（Linux、Windows、macOS）
 
-## How to?
+## 如何使用？
 
-Hardware requirements
+硬件需求
 
 - Raspberry Pi Pico
-- 1 x SPI or I8080 TFT display, [here]() a list of compatible driver
+- 1 个 SPI 或 I8080 TFT 显示器，[这里]() 是兼容驱动列表
 
-### Setup your Pico board
+### 设置您的 Pico 开发板
 
-Go to the Github Release page and download the prebuilt firmware uf2 file.
+前往 GitHub Release 页面下载预编译的固件 uf2 文件。
 
-Also, If you want to compile the firmware yourself (Assuming you are using a Ubuntu machine)
+另外，如果您想自己编译固件（假设您使用的是 Ubuntu 机器）
 
-#### 1. Install the [Pico SDK](https://github.com/raspberrypi/pico-sdk)
+#### 1. 安装 [Pico SDK](https://github.com/raspberrypi/pico-sdk)
 
 ```bash
 git clone https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
@@ -34,25 +36,25 @@ cd ~/pico-sdk
 git submodule update --init
 ```
 
-#### 2. Install CMake (at least version 3.13), python 3, a native compiler, and a GCC cross compiler
+#### 2. 安装 CMake（至少 3.13 版本）、python 3、本地编译器和 GCC 交叉编译器
 
 ```bash
 sudo apt install cmake python3 build-essential gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib ninja-build
 ```
 
-#### 3. Clone this repo
+#### 3. 克隆此仓库
 
 ```bash
 git clone https://github.com/embeddedboys/Pico-USB-Display.git
 cd Pico-USB-Display
 ```
 
-#### 3. Select the config you need, open `CMakeLists.txt` and :
+#### 4. 选择您需要的配置，打开 `CMakeLists.txt` 并：
 
-==You can find the pin definitions in the configuration file.==
+==您可以在配置文件中找到引脚定义。==
 
 ```cmake
-# **********  select the suitable config file  **********
+# **********  选择合适的配置文件  **********
 include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728_8bit.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_yt350s006.cmake)
@@ -60,7 +62,7 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
 ```
 
-#### 4. Then build the firmware
+#### 5. 然后构建固件
 ```bash
 mkdir -p build && cd build
 cmake .. -G Ninja
@@ -78,33 +80,33 @@ Memory region         Used Size  Region Size  %age Used
      98328     158372      32792     289492 pico-usb-display.elf
 ```
 
-You can find the firmware in the `build` directory.
+您可以在 `build` 目录中找到固件。
 
-#### 5. Copy the udev rules to `/etc/udev/rules.d/`
+#### 6. 将 udev 规则复制到 `/etc/udev/rules.d/`
 
-If you don't want to access USB devices with root privileges, then you need to configure udev rules correctly.
+如果您不想使用 root 权限访问 USB 设备，则需要正确配置 udev 规则。
 ```bash
 sudo cp 50-pico-usb-display.rules /etc/udev/rules.d/
 
-# Then reload the udev rules
+# 然后重新加载 udev 规则
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-#### 6. Flash the firmware to your Pico board
+#### 7. 将固件烧录到您的 Pico 开发板
 
-Pico has provided a bootloader that can easily flash the firmware to the Pico board. Hold the `BOOTSEL` button while plugging in the Pico board, and a drive named `RPI-RP2` or `RP2350` will be mounted. Then you can copy the `pico-usb-display.uf2` file to the drive and the firmware will be flashed to the Pico board.
+Pico 提供了一个引导加载程序，可以轻松地将固件烧录到 Pico 开发板。在插入 Pico 开发板时按住 `BOOTSEL` 按钮，将会挂载一个名为 `RPI-RP2` 或 `RP2350` 的驱动器。然后将 `pico-usb-display.uf2` 文件复制到该驱动器，固件将被烧录到 Pico 开发板。
 
-Once the firmware flashing is complete, you will see some content displayed on the screen. Here is an example：
+固件烧录完成后，您将看到屏幕上显示一些内容。这是一个示例：
 
 ![boot](./assets/bootlogo.jpg)
 
-### Display Pictures and videos
+### 显示图片和视频
 
-If you don't want to hack, then a Python script is the simplest way to use it, but DRM driver or other methods (in the future) are more effcient.
+如果您不想进行深度定制，那么 Python 脚本是使用它的最简单方法，但 DRM 驱动或其他方法（未来）会更高效。
 
-#### Python script
+#### Python 脚本
 
-create a python3 venv and install requierments
+创建一个 python3 虚拟环境并安装依赖项
 
 ```bash
 python3 -m venv .venv
@@ -113,26 +115,26 @@ source .venv/bin/activate
 pip install pyusb opencv-python numpy
 ```
 
-If you want to show a picture on pico display:
+如果您想在 pico 显示器上显示图片：
 ```bash
-# Usage: ./scripts/img_viewer.py [xres] [yres] <file.jpg>
+# 用法: ./scripts/img_viewer.py [xres] [yres] <file.jpg>
 
 ./scripts/img_viewer.py 480 320 ~/Pictures/artplayer_19_21.png
 ```
 
-Or you want to play a video on the pico display:
+或者您想在 pico 显示器上播放视频：
 ```bash
-# Usage: ./scripts/video_player.py [xres] [yres] [quality|1-100] <video.mp4>
+# 用法: ./scripts/video_player.py [xres] [yres] [quality|1-100] <video.mp4>
 
 ./scripts/video_player.py 480 320 50 ~/Videos/jazz_15fps.mp4
 ```
 
-You probably also want to know how to set the video to 15fps:
+您可能还想知道如何将视频设置为 15fps：
 ```bash
 ffmpeg -i ./jazz.mp4 -vf "fps=15" -c:v libx264 -preset fast -crf 23 -c:a copy ./jazz_15fps.mp4
 ```
 
-#### Kernel driver
+#### 内核驱动
 
 ```bash
 git clone https://github.com/embeddedboys/PUD-kernel-drivers
@@ -142,12 +144,12 @@ make
 sudo insmod pud.ko
 ```
 
-Then you can easily play the video using the following command:
+然后您可以使用以下命令轻松播放视频：
 
 ```bash
 ffplay ./jazz.mp4
 ```
 
-## Links
+## 链接
 
-- [PUD-kernel-drivers - A drm driver for Pico USB Display](https://github.com/embeddedboys/PUD-kernel-drivers)
+- [PUD-kernel-drivers - Pico USB Display 的 DRM 驱动程序](https://github.com/embeddedboys/PUD-kernel-drivers)
