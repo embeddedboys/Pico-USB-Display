@@ -23,6 +23,7 @@
 #define __DECODER_H
 
 #include <pico/mutex.h>
+#include <stdbool.h>
 
 // #include "tjpgd/tjpgd.h"
 #include "JPEGDEC.h"
@@ -30,6 +31,7 @@
 #define DECODER_USE_TJPGD   0
 #define DECODER_USE_JPEGDEC 1
 #define DECODER_USE_LZ4     2
+#define DECODER_USE_QOI     3
 
 #ifndef DECODER_TYPE
 	#define DECODER_TYPE DECODER_USE_JPEGDEC
@@ -47,10 +49,14 @@ extern uint16_t decoder_xe, decoder_ye;
 // extern JRESULT jd_drawimg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size);
 extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
 extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size);
+extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size);
 
 extern void decoder_init(void);
 extern void decoder_set_xy(u16 x, u16 y);
 extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
+extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye,
+				 const u8 *data, u32 size);
+extern bool decoder_slot_free(void);
 
 #if DECODER_TYPE == DECODER_USE_TJPGD
 	#error "TJPGD decoder is unimplemented yet"
@@ -59,6 +65,8 @@ extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
 	#define decoder_drawimg(xs, ys, xe, ye, b, l) jpegdec_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_LZ4
 	#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
+#elif DECODER_TYPE == DECODER_USE_QOI
+	#define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
 #else
 	#error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */

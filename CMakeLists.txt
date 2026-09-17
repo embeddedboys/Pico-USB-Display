@@ -37,6 +37,13 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
 
+# Disable overclocking for stability (RP2350 at default 150 MHz instead of 225 MHz)
+set(OVERCLOCK_ENABLED 0)
+
+# Use the PIO polling path for the I8080 TFT writes instead of DMA: the DMA
+# DREQ interaction with the PIO stalls under load (freezes the display)
+set(PIO_USE_DMA 0)
+
 # All the public source files of this project
 set(PUD_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/main.c
@@ -58,7 +65,8 @@ add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 #  0  |  tjpgd   |  jpeg   |
 #  1  | JPEGDEC  |  jpeg   |
 #  2  |  lz4     |  lz4    |
-set(DECODER_TYPE 1)
+#  3  |  qoi     |  qoi    |
+set(DECODER_TYPE 3)
 
 add_executable(${PROJECT_NAME})
 
@@ -84,6 +92,7 @@ target_link_libraries(${PROJECT_NAME}
     cherryusb_device
     jpegdec
     lz4
+    qoi
     FreeRTOS-Kernel-Heap3
 )
 

@@ -1,0 +1,144 @@
+# USB 厂商协议（设备侧）
+
+> **字段定义的权威来源是** `PUD-kernel-drivers/notes/usb-protocol.md`。
+> 本文只讲**设备侧怎么处理**，与那份文档配对阅读。
+
+## 端点在固件里的落点
+
+| 端点 | 描述符 | 接收缓冲 | 回调 |
+| --- | --- | --- | --- |
+| EP1 OUT (bulk) | `USB_BULK_EP_MPS_FS` | `ep1_read_buffer[EP1_RD_BUF_SIZE]` = **131072 字节** | `usbd_vendor_ep1_bulk_out()` |
+| EP2 IN (bulk) | `USB_BULK_EP_MPS_FS` | `ep2_write_buffer[EP2_WR_BUF_SIZE]` = 128 | `usbd_vendor_ep2_bulk_in()`（空实现） |
+| EP4 IN (int, 64B, bInterval 33) | — | `ep4_write_buffer[EP4_WR_BUF_SIZE]` = 128 | `usbd_vendor_ep4_int_in()`（空实现） |
+
+`ep1_read_buffer` 等用 `USB_NOCACHE_RAM_SECTION` + `USB_MEM_ALIGNX` 声明，
+保证不被 cache 影响、且满足 USB 控制器的对齐要求。
+
+`EP3` 在 `usbd_vendor.h` 里有定义（`REQ_EP3_OUT` / `EP3_OUT_ADDR`），
+但**没有写进配置描述符**，主机看不到它。
+
+## 请求分发
+
+所有厂商请求都在 `vendor_request_handler()` 里分发（`src/cherryusb/usbd_vendor.c`）：
+
+```c
+switch (setup->bRequest) {
+case REQ_EP1_OUT:  /* 图像帧：窗口协商 */
+case REQ_EP2_IN:   /* 查询：命令 + 长度 */
+case REQ_EP4_IN:   /* 触摸 */
+default:           return -1;
+}
+```
+
+## EP1 图像帧的处理（含流控）
+
+```c
+case REQ_EP1_OUT:
+    req_ep1_out = (struct req_ep1_out *)*data;
+    decoder_set_window(req_ep1_out->xs, req_ep1_out->ys,
+                       req_ep1_out->xe, req_ep1_out->ye);
+
+    /* Flow control: only accept the frame once a decoder slot is free. */
+    if (!decoder_slot_free()) {
+        usbd_vendor_ep1_defer(req_ep1_out->size);
+        return 0;                     /* 故意不武装 EP1 */
+    }
+    return usbd_ep_start_read(busid, EP1_OUT_ADDR, ep1_read_buffer,
+                              req_ep1_out->size);
+```
+
+数据到达后：
+
+```c
+void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
+{
+    if (!nbytes) return;
+    /* 不在中断里解码！见 pitfalls.md */
+    decoder_submit_frame(decoder_xs, decoder_ys, decoder_xe, decoder_ye,
+                         ep1_read_buffer, nbytes);
+}
+```
+
+**注意 `xe`/`ye` 是闭区间**：固件算宽度用 `xe - xs + 1`。
+
+### 流控为什么这样设计
+
+固件只有 2 个解码帧槽（`DECODER_FRAME_SLOTS`）。主机以数百帧/秒推送局部刷新时，
+解码任务容易跟不上。最初的实现是"槽满就丢帧" —— 结果是**残影**：
+丢掉的那帧里有某个区域的最新内容，随后又被一帧旧内容覆盖回去。
+
+改成**背压**：槽满时不武装 EP1。因为主机的批量传输紧跟在其控制请求之后，
+端点没武装，主机的 bulk 写入自然阻塞等待 —— 协议不需要任何改动，
+主机侧（`usb_sg_wait()`）也无需感知。
+
+代价与前提：
+- 主机的 `pud_flush()` 有 3 秒超时看门狗；解码是毫秒级，正常不会触发。
+- 主机在 bulk 传输期间不会发出下一个控制请求，所以 `decoder_set_window()` 设置的
+  全局窗口在被延迟处理期间不会被覆盖 —— **这是该设计成立的关键前提**。
+
+### 延迟武装的补发
+
+`usbd_vendor_ep1_arm/defer/tick` 三个函数（`src/cherryusb/usb.c`）：
+
+```c
+static volatile uint32_t s_ep1_pending_size;
+
+void usbd_vendor_ep1_defer(uint32_t size) { s_ep1_pending_size = size; }
+
+/* 由解码任务在释放帧槽后调用 */
+void usbd_vendor_ep1_tick(void)
+{
+    uint32_t size = s_ep1_pending_size;
+    if (size) {
+        s_ep1_pending_size = 0;
+        usbd_vendor_ep1_arm(size);
+    }
+}
+```
+
+调用点在 `decoder_task()` 释放槽位之后。由于主机被阻塞、不可能并发下发新的控制请求，
+这个标志位不存在竞态（但仍声明为 `volatile` 以防编译器优化掉读）。
+
+## EP2 查询的处理
+
+```c
+case REQ_EP2_IN:
+    req_ep2_in = (struct req_ep2_in *)*data;    /* { u16 cmd; u16 size; } */
+    usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd, req_ep2_in->size);
+    return usbd_ep_start_write(busid, EP2_IN_ADDR, ep2_write_buffer,
+                               req_ep2_in->size);
+```
+
+`usbd_vendor_ep2_bulk_in_fsm()` 目前只实现一条命令：
+
+| cmd | 名称 | 动作 |
+| --- | --- | --- |
+| `0x01` | `pud_CMD_GET_SN` | `pud_get_ro_sn(ep2_write_buffer, len)` 填 8 字节唯一 ID |
+
+## EP4 触摸的处理
+
+```c
+case REQ_EP4_IN:
+    return usbd_ep_start_write(busid, EP4_IN_ADDR, ep4_write_buffer, 64);
+```
+
+主机先发一个 `REQ_EP4_IN` 控制请求，再提交中断 IN 的 URB。
+`usbd_vendor_ep4_int_in()` 目前是空实现 —— **触摸数据还没有真正上报**，
+缓冲区里的内容不会被更新。要接通触摸，需要在 `src/pud.c` 的 `indev` 层
+把坐标写进 `ep4_write_buffer` 并触发一次传输。
+
+## 协议层的已知不一致（两侧都要知道）
+
+1. **主机用 16 字节 wLength 传 12 字节的有效结构**（`struct req_ep1_out`）。
+   固件只读前 12 字节，所以现在能工作。
+2. **`size` 可能比真实压缩长度大 1**（主机为 RP2350 做了向上取偶）。
+   QOI 解码在结束标记处停止，不会消费多余字节。
+
+详见 `PUD-kernel-drivers/notes/usb-protocol.md` 的两节"已知不一致"。
+
+## 改协议时的检查清单
+
+1. `src/cherryusb/usbd_vendor.c` 的结构体与 `vendor_request_handler()`
+2. `src/cherryusb/usbd_vendor.h` 的 `REQ_*` / 端点地址 / 缓冲尺寸
+3. 驱动 `usb.c` 的对应结构体与 `pud_feed_ctrl_buf()`
+4. 两侧 notes 里的协议文档

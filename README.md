@@ -154,6 +154,17 @@ sudo insmod pud.ko
 ffplay ./jazz.mp4
 ```
 
+## 开发文档
+
+面向维护者的设计说明与踩坑总结在 [`notes/`](./notes/)：
+
+- [架构与启动流程](./notes/architecture.md)
+- [USB 协议（设备侧）](./notes/usb-protocol.md)
+- [解码器与帧流水线](./notes/decoders.md)（含 EP1 流控）
+- [构建与烧录](./notes/build-and-flash.md)
+- [调试](./notes/debugging.md)
+- [踩坑合集](./notes/pitfalls.md)
+
 ## 本项目使用的开源软件
 
 - [FreeRTOS-Kernel](https://github.com/FreeRTOS/FreeRTOS-Kernel)

@@ -20,11 +20,17 @@
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <stdlib.h>
+#include <string.h>
 
 // #include "udd.h"
 #include "tft.h"
 #include "decoder.h"
 #include "lz4.h"
+#include "usb.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h"
 
 mutex_t decoder_mutex;
 uint16_t decoder_xs, decoder_ys;
@@ -108,11 +114,16 @@ struct jpegdec_data g_jpegdec;
 
 int draw_mcus(JPEGDRAW *pDraw)
 {
-	int iCount = pDraw->iWidth * pDraw->iHeight *
+	/* iWidth is the MCU-pitch padded width; only iWidthUsed pixels are
+	 * valid for edge/cropped blocks. Flushing the padded width smears
+	 * garbage over the right edge of partial updates (skewed image).
+	 */
+	int iWidth = pDraw->iWidthUsed;
+	int iCount = iWidth * pDraw->iHeight *
 		     2; /* sizeof(*pDraw->pPixels) */
 	int xs = pDraw->x;
 	int ys = pDraw->y;
-	int xe = pDraw->x + pDraw->iWidth - 1;
+	int xe = pDraw->x + iWidth - 1;
 	int ye = pDraw->y + pDraw->iHeight - 1;
 
 	tft_video_flush(xs, ys, xe, ye, pDraw->pPixels, iCount);
@@ -166,6 +177,60 @@ decompress_failed:
 	free(lz4_workspace);
 }
 
+/*
+ * QOI (Quite OK Image, RGB565 variant) decoding.
+ *
+ * The stream is decoded in small batches via a callback so we never need to
+ * hold a full frame in RAM: each decoded batch is flushed straight to the
+ * TFT. The batch rectangle is relative to the frame; we add the frame origin.
+ */
+#include "rgb565_qoi.h"
+
+#define QOI_BUF_ROWS 8
+
+/* 480 x QOI_BUF_ROWS pixels per accumulation buffer, two ping-pong buffers */
+static uint16_t qoi_buf_a[480 * QOI_BUF_ROWS];
+static uint16_t qoi_buf_b[480 * QOI_BUF_ROWS];
+
+struct qoi_draw_ctx {
+	uint16_t ox;
+	uint16_t oy;
+};
+
+static void qoi_flush(const uint16_t *pixels, size_t count,
+		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
+		      void *user_data)
+{
+	struct qoi_draw_ctx *ctx = (struct qoi_draw_ctx *)user_data;
+
+	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
+			ctx->ox + xe, ctx->oy + ye,
+			(void *)pixels, count * 2);
+}
+
+void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
+{
+	struct qoi_draw_ctx ctx;
+	uint16_t width = xe - xs + 1;
+	size_t buf_cap;
+
+	if (qoi_data == NULL || qoi_size == 0 || width == 0 || width > 480)
+		return;
+
+	ctx.ox = xs;
+	ctx.oy = ys;
+
+	/* Keep batches aligned to whole rows: a multiple of the frame width,
+	 * capped at the static buffer size. */
+	buf_cap = (size_t)width * QOI_BUF_ROWS;
+	if (buf_cap > 480 * QOI_BUF_ROWS)
+		buf_cap = 480 * QOI_BUF_ROWS;
+
+	rgb565_qoi_decompress_callback(qoi_data, qoi_size, width,
+				       qoi_buf_a, qoi_buf_b,
+				       buf_cap, qoi_flush, &ctx);
+}
+
 void decoder_set_xy(u16 x, u16 y)
 {
 	mutex_enter_blocking(&decoder_mutex);
@@ -176,18 +241,124 @@ void decoder_set_xy(u16 x, u16 y)
 
 void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
 {
-	mutex_enter_blocking(&decoder_mutex);
+	/* Called from the USB ISR only, so no blocking is allowed. The decoder
+	 * task reads the window from the submitted frame instead of these
+	 * globals.
+	 */
 	decoder_xs = xs;
 	decoder_ys = ys;
 	decoder_xe = xe;
 	decoder_ye = ye;
-	mutex_exit(&decoder_mutex);
 }
 
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4" };
+/*
+ * JPEG decoding and the TFT flush must NOT run on the USB interrupt stack:
+ * the decode path needs a large stack and holding the USB IRQ for tens of
+ * milliseconds wedges the USB controller and corrupts the interrupt stack.
+ * The USB ISR therefore just copies the received frame into a slot and wakes
+ * a dedicated decoder task which does the actual work.
+ */
+#define DECODER_FRAME_SLOTS 2
+#define DECODER_FRAME_MAX   65536
+
+struct decoder_frame {
+	u16 xs, ys, xe, ye;
+	u32 size;
+	u8 busy;
+	u8 data[DECODER_FRAME_MAX];
+};
+
+static struct decoder_frame s_frames[DECODER_FRAME_SLOTS];
+static SemaphoreHandle_t s_decoder_sem;
+
+/* Diagnostics, readable from a debugger: frames seen / dropped / drawn.
+ * A non-zero drop count means the host is outrunning the decoder and some
+ * partial updates never reach the panel (visible as stale regions). */
+volatile u32 g_decoder_stat_submitted;
+volatile u32 g_decoder_stat_dropped;
+volatile u32 g_decoder_stat_drawn;
+
+/* True when at least one frame slot is idle, i.e. the USB stack may arm
+ * EP1 for the next frame.  Used for EP1 flow control (see usb.h). */
+bool decoder_slot_free(void)
+{
+	int i;
+
+	for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
+		if (!s_frames[i].busy)
+			return true;
+	}
+
+	return false;
+}
+
+void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
+			  u32 size)
+{
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	int i;
+
+	if (size > DECODER_FRAME_MAX)
+		size = DECODER_FRAME_MAX;
+
+	g_decoder_stat_submitted++;
+
+	for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
+		if (!s_frames[i].busy) {
+			s_frames[i].xs = xs;
+			s_frames[i].ys = ys;
+			s_frames[i].xe = xe;
+			s_frames[i].ye = ye;
+			s_frames[i].size = size;
+			memcpy(s_frames[i].data, data, size);
+			s_frames[i].busy = 1;
+			xSemaphoreGiveFromISR(s_decoder_sem,
+					      &xHigherPriorityTaskWoken);
+			break;
+		}
+	}
+
+	if (i == DECODER_FRAME_SLOTS)
+		g_decoder_stat_dropped++;
+
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+static void decoder_task(void *param)
+{
+	int i;
+
+	(void)param;
+
+	for (;;) {
+		xSemaphoreTake(s_decoder_sem, portMAX_DELAY);
+
+		for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
+			if (s_frames[i].busy) {
+				mutex_enter_blocking(&decoder_mutex);
+				decoder_drawimg(s_frames[i].xs, s_frames[i].ys,
+						s_frames[i].xe, s_frames[i].ye,
+						s_frames[i].data,
+						s_frames[i].size);
+				mutex_exit(&decoder_mutex);
+				s_frames[i].busy = 0;
+				g_decoder_stat_drawn++;
+				/* A slot is free again: re-arm EP1 if the
+				 * host's request was deferred. */
+				usbd_vendor_ep1_tick();
+				break;
+			}
+		}
+	}
+}
+
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
 
 void decoder_init(void)
 {
 	mutex_init(&decoder_mutex);
+	s_decoder_sem = xSemaphoreCreateBinary();
+	xTaskCreate(decoder_task, "decoder_task", 4096, NULL,
+		    tskIDLE_PRIORITY + 1, NULL);
 	printf("Decoder type: %s\n", decoder_names[DECODER_TYPE]);
 }

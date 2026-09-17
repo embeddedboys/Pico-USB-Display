@@ -154,6 +154,17 @@ Then you can easily play the video using the following command:
 ffplay ./jazz.mp4
 ```
 
+## Developer documentation
+
+Design notes and pitfall write-ups for maintainers live in [`notes/`](./notes/):
+
+- [Architecture and boot flow](./notes/architecture.md)
+- [USB protocol (device side)](./notes/usb-protocol.md)
+- [Decoders and frame pipeline](./notes/decoders.md) (incl. EP1 flow control)
+- [Build and flash](./notes/build-and-flash.md)
+- [Debugging](./notes/debugging.md)
+- [Pitfalls](./notes/pitfalls.md)
+
 ## Links
 
 - [PUD-kernel-drivers - A drm driver for Pico USB Display](https://github.com/embeddedboys/PUD-kernel-drivers)

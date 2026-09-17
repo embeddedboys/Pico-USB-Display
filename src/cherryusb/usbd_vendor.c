@@ -1,5 +1,6 @@
 #include "usbd_core.h"
 #include "usbd_vendor.h"
+#include "usb.h"
 
 #include "decoder.h"
 
@@ -71,6 +72,17 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 
 		// USB_LOG_WRN("%s, req_ep1_out, x : 0x%04x, y : 0x%04x, size : %d\n",
 		//                     __func__, decoder_x, decoder_y, transfer_size);
+
+		/* Flow control: only accept the frame once a decoder slot is
+		 * free.  Otherwise leave EP1 un-armed (defer) so the host's
+		 * bulk write blocks instead of the frame being dropped; the
+		 * decoder task re-arms it via usbd_vendor_ep1_tick().
+		 */
+		if (!decoder_slot_free()) {
+			usbd_vendor_ep1_defer(req_ep1_out->size);
+			return 0;
+		}
+
 		return usbd_ep_start_read(busid, EP1_OUT_ADDR, ep1_read_buffer,
 					  req_ep1_out->size);
 	case REQ_EP2_IN:

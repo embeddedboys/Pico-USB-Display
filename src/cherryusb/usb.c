@@ -31,15 +31,45 @@ extern uint8_t ep1_read_buffer[EP1_RD_BUF_SIZE];
 extern uint8_t ep2_write_buffer[EP2_WR_BUF_SIZE];
 extern uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
 
+/* Flow control: see usb.h.  EP1 is deliberately left un-armed while the
+ * decoder is busy, which stalls the host's bulk write instead of dropping
+ * the frame.  Only ever touched from the USB ISR and the decoder task.
+ */
+static volatile uint32_t s_ep1_pending_size;
+
+void usbd_vendor_ep1_arm(uint32_t size)
+{
+	if (!size)
+		return;
+	usbd_ep_start_read(0, EP1_OUT_ADDR, ep1_read_buffer, size);
+}
+
+void usbd_vendor_ep1_defer(uint32_t size)
+{
+	s_ep1_pending_size = size;
+}
+
+/* Called by the decoder task after releasing a frame slot. */
+void usbd_vendor_ep1_tick(void)
+{
+	uint32_t size = s_ep1_pending_size;
+
+	if (size) {
+		s_ep1_pending_size = 0;
+		usbd_vendor_ep1_arm(size);
+	}
+}
+
 void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
 	if (!nbytes)
 		return;
 
-	mutex_enter_blocking(&decoder_mutex);
-	decoder_drawimg(decoder_xs, decoder_ys, decoder_xe, decoder_ye,
-			ep1_read_buffer, nbytes);
-	mutex_exit(&decoder_mutex);
+	/* Do not decode here: this runs on the USB interrupt stack. Hand the
+	 * frame to the decoder task instead.
+	 */
+	decoder_submit_frame(decoder_xs, decoder_ys, decoder_xe, decoder_ye,
+			     ep1_read_buffer, nbytes);
 }
 
 void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
