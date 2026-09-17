@@ -90,7 +90,7 @@ You can find the firmware in the `build` directory.
 
 If you don't want to access USB devices with root privileges, then you need to configure udev rules correctly.
 ```bash
-sudo cp 50-pico-usb-display.rules /etc/udev/rules.d/
+sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 
 # Then reload the udev rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
@@ -163,6 +163,7 @@ Design notes and pitfall write-ups for maintainers live in [`notes/`](./notes/):
 - [Decoders and frame pipeline](./notes/decoders.md) (incl. EP1 flow control)
 - [Build and flash](./notes/build-and-flash.md)
 - [Debugging](./notes/debugging.md)
+- [Userspace tools](./notes/scripts.md)
 - [Pitfalls](./notes/pitfalls.md)
 
 ## Links

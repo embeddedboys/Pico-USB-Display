@@ -189,3 +189,104 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 ```
 
 `iWidth` 是整图宽度，`iWidthUsed` 才是本次实际解码的宽度。用错会导致每行像素偏移错位。
+
+## 性能：解码器批量填充 + 异步刷新
+
+两处优化，都有实测数据。全屏纯色的端到端耗时从 **36.27 ms 降到 5.63 ms（6.4×）**。
+
+### 1. RUN chunk 批量填充（库内 `rgb565_qoi.c`）
+
+`rgb565_qoi_decompress_callback()` 原本逐像素迭代，`EMIT_PIXEL` 对每个像素都重做
+行环绕与容量判断。RUN chunk 因此把同样的簿记重复了 run 次。
+
+改法：**只改 RUN 分支**，把重复像素用一段紧凑内层循环填完（`EMIT_RUN`），
+并被 clamp 到图像末尾；冲刷点与原来完全一致。
+
+| 内容（480×320 全帧） | 解码耗时 | 每像素 |
+| --- | --- | --- |
+| RUN 密集（纯色/渐变） | 32.65 ms → **5.0 ms** | 213 → **32.7 ns/px** |
+| RGB565 密集（噪声） | — | 499 → **473 ns/px** |
+
+**踩坑记录（很重要）**：第一版重构把 `EMIT_PIXEL` 从 5 个分支里合并成一份，
+结果噪声类内容在 Cortex-M33 上**慢了 20%**（499 → 600 ns/px）。原因不是算法，而是
+**寄存器分配**：原版每个分支各展开一份，`buf` 指针能驻留在寄存器；合并后它必须跨
+分派存活，被编译器挤到栈上（EMIT 快路径从约 8 条指令涨到约 14 条）。
+所以这里刻意**保留了每个分支各展开一份 EMIT_PIXEL 的写法** —— 用最小改动换性能。
+
+> 教训：x86 上的 A/B（`gcc -O2/-O3`）**复现不了**这个回退（主机上反而更快），
+> 因为编译器差异太大。这类寄存器分配问题只能看 `arm-none-eabi-gcc` 的汇编或上机实测。
+
+### 2. 异步刷新（`pico-display-lib` 新增接口，不改原有接口）
+
+原来 `i80_write_buf_rs()` 在 `dma_channel_wait_for_finish_blocking()` 上阻塞，
+CPU 干等总线。新增的异步接口把这次等待挪到**下一次调用**，中间的空档留给解码：
+
+| 接口 | 位置 | 说明 |
+| --- | --- | --- |
+| `i80_write_buf_rs_async(buf, len, rs)` | `drivers/bus/pio_i80.c` | 启动 DMA 后立即返回 |
+| `i80_write_sync()` | 同上 | 等待在途传输并完成尾部 CS 释放 |
+| `tft_async_video_flush(...)` | `drivers/display/tft.c` | 异步版 `tft_video_flush` |
+| `tft_async_video_wait()` | 同上 | 帧末等待 |
+
+**引脚时序与同步路径完全一致**：异步版在下次调用的开头等 DMA、再释放 CS，
+而同步版是在调用内部等 —— 只是等待的位置变了。因此显示波形不变。
+
+**缓冲区复用安全**：同一时刻只允许一个传输在途（新传输开始前先完成上一个）。
+QOI 解码器的 `qoi_buf_a`/`qoi_buf_b` 乒乓因此天然安全 —— 一个缓冲再次被写入前，
+中间那次 flush 已经等过它了。`qoi_drawimg()` 在解码返回后调用
+`tft_async_video_wait()`，保证这一帧真正画完。
+
+| 指标（全屏纯色） | 同步 | 异步 |
+| --- | --- | --- |
+| 帧率 | 123.8 fps（8.00 ms） | **177.5 fps（5.63 ms）** |
+| partial 64×64 | 3.69 ms | **3.19 ms** |
+| partial 128×64 | 6.99 ms | **6.31 ms** |
+
+稳定性：45 秒混合重载 646 次传输（median 57.77 / p99 58.01 / max 58.46 ms，无超时）、
+9000 帧高频局刷，全程 `dropped=0` 且 `drawn == submitted`。
+
+**上限在哪**：显示路径实测 21.9 ns/px，而 PIO 理论值是 20 ns/px（`clk_div=1.5`、
+`out+nop` 两周期）—— 已经跑在总线极限上，所以异步能拿回的只有这部分重叠收益，
+再往上要改的是总线本身（提高 `TFT_BUS_CLK_KHZ` 或换总线）。
+
+### 诊断开关
+
+`src/decoders/decoder.c` 的计时计数器默认关闭，需要时打开：
+
+```bash
+cd build-pico2 && cmake .. -DPICO_BOARD=pico2 -DDECODER_STATS=1 && cmake --build . -j8
+```
+
+然后按帧读增量（只能增，测一段已知负载的差值）：
+
+```gdb
+printf "%u %u %u %u %u\n", g_qoi_stat_draw_us, g_qoi_stat_flush_us, \
+       g_qoi_stat_pixels, g_qoi_stat_calls, g_qoi_stat_frames
+```
+
+注意 `g_qoi_stat_flush_us` 在异步模式下**不再等于总线时间**（调用立即返回），
+要看总时间用 `draw_us`。
+
+### 命令与数据的顺序（异步接口的安全前提）
+
+一个必须明确的点：**地址窗口这类命令不能走异步路径**，否则命令与在途数据可能乱序。
+本实现的做法是：
+
+- 所有命令（`set_addr_win`、`write_reg`、`tft_write_cmd/data`）都走**同步**宏
+  `write_buf_dc` → `i80_write_buf_rs()`；
+- 异步宏 `write_buf_dc_async` 在整库里**只有一处调用**：`tft_async_video_flush()`
+  里的像素数据；
+- 同步入口的第一步就是 `i80_finish_pending()` —— 先等在途异步传输的 DMA 完成并释放 CS，
+  再 `i80_wait_idle()` 等 PIO 排空，然后才拉 CS/RS 发命令。所以命令**不可能越过**在途数据；
+- 命令→数据的边界同理：`set_addr_win` 最后一个字节（`0x2C`）同步发完后，
+  异步入口同样先 `finish_pending()` + `wait_idle()` 才切 RS=1 启动数据 DMA。
+
+这与原同步路径的步骤**完全一致**，只是等待发生的位置不同，因此引脚时序不变。
+
+**测试缺口与补法（重要）**：`fps_bench.py` 的局刷用例**窗口位置是固定的**，
+这种情况下即使窗口命令真的乱序、画面也看不出问题（每次重发的 CASET/RASET 值相同）。
+所以另有一个**窗口逐帧移动**的测试：每帧先把上一位置擦成背景色、再画到新位置，
+正确时应始终只看到一个块；任何乱序都会表现为拖影、两个块或位置错一帧。
+
+实测：807 次传输（8 段背景 + 799 个块）精确计数、`dropped=0`、`drawn == submitted`，
+且人眼确认「只有一个亮块在跳、无拖影」。

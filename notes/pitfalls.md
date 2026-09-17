@@ -75,16 +75,61 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
 **观察**：DMA 的 `TREQ_SEL` 读出来是 `0x20`，而期望值是 `1` —— PIO 与 DMA 的
 DREQ 握手没有正确建立。
 
-**修法**：`CMakeLists.txt` 里关掉 DMA，走 PIO 轮询路径：
+**当时的修法**：`CMakeLists.txt` 里关掉 DMA，走 PIO 轮询路径：
 
 ```cmake
 set(PIO_USE_DMA 0)
 ```
 
-代价是 CPU 占用升高，但对这个应用可接受。**想改回 DMA 必须先做压力测试**，
-并确认 `TREQ_SEL` 取值与 PIO 的 DREQ 编号匹配。
+#### 重新启用 DMA 的实测结论（`PIO_USE_DMA=1`）
 
-### 2.2 JPEGDEC 的子图裁切
+后来在用户空间用 pyusb 重测（此时固件已有 EP1 流控，帧率不再被无节制地灌满），
+**DMA 路径稳定且更快**：
+
+| 用例 | `PIO_USE_DMA=0` | `PIO_USE_DMA=1` |
+| --- | --- | --- |
+| full/solid（8 段） | 42.45 ms / 23.6 fps | **36.27 ms / 27.5 fps** |
+| full/solid（单次传输） | 42.02 ms / 24.4 fps | **36.00 ms / 28.8 fps** |
+| full/gradient（8 段） | 54.00 ms / 18.6 fps | **48.00 ms / 20.9 fps** |
+| full/photo | 123.18 ms / 8.12 fps | 122.82 ms / 8.17 fps（USB 受限，不变） |
+| full/noise | 427.11 ms / 2.34 fps | 426.93 ms / 2.34 fps（USB 受限，不变） |
+| partial 64×64 | 2.99 ms / 320.7 fps | 3.11 ms / 322.4 fps（USB 受限，不变） |
+
+稳定性验证（45 秒混合重载 + 9000 帧高频局刷，均为用户空间流量）：
+
+- 混合重载 646 次传输，延迟分布极紧：median 57.79 / p99 58.15 / max 58.53 ms，无超时；
+- 高频局刷 9000 帧后计数器 `submitted` 精确 +9000、`dropped=0`、`drawn == submitted`；
+- 全程无 `dma_channel_is_busy` 自旋、无卡死。
+
+**结论**：全刷提升 12–16%，USB 受限的用例不变（符合预期）。因此工作区里
+`PIO_USE_DMA` 已改回 `1`。
+
+> ⚠️ 仍需留意：当初的卡死是在**内核驱动 + 桌面动画**的负载下出现的，上面是用户空间流量。
+> 加载驱动后建议再做一次桌面 soak 测试。若再次冻结，回退办法就是改回 `0`。
+
+**附带推论**：全刷 153600 像素固定要 ~36 ms（≈4.3 Mpx/s），这就是全刷约 27 fps 的
+天花板 —— 想继续提升要优化这条写入路径，而不是图像压缩（纯色全屏只压缩到 2.6 KB，
+照样只有 27 fps）。
+
+### 2.2 LZ4 解码器的三个问题（待修）
+
+`lz4_drawimg()`（`src/decoders/decoder.c`）目前：
+
+1. **每帧 `malloc`/`free` 约 307 KB 工作区**（`LZ4_compressBound(480*320*2)`）。
+   在只有 512 KB SRAM 的 MCU 上这是很大的抖动源，应改成静态缓冲。
+2. **每帧 3 行 `printf`**（`lz4_drawimg, size:...` 等）。115200 波特下约 10 ms/帧，
+   顺手就把 LZ4 的"快"吃掉了。
+3. **整帧解码**：它把整个流解到全屏工作区，再用传入的窗口去 `tft_video_flush`。
+   所以**传局部窗口会用错数据** —— LZ4 路径实际上只支持整屏帧。
+
+另外 `LZ4_decompress_safe()` 的第 4 个参数传的是 `max_compressed_size`（压缩上界），
+虽然大于等于帧大小因而不出错，但语义上应是目标缓冲容量，建议改成显式的帧大小。
+
+实测（`scripts/lz4_img_viewer.py`）：480×320 的照片类内容 LZ4 只有 **2.18:1**
+（140736 B），**超过 64 KB 传输上限**，因此 LZ4 路径实际只能显示非常简单的画面。
+用它之前先确认内容能压到 65535 B 以内。
+
+### 2.3 JPEGDEC 的子图裁切
 
 `draw_mcus` 里必须用 `pDraw->iWidthUsed`，**不是** `pDraw->iWidth`：
 

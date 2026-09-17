@@ -90,7 +90,7 @@ Memory region         Used Size  Region Size  %age Used
 
 如果您不想使用 root 权限访问 USB 设备，则需要正确配置 udev 规则。
 ```bash
-sudo cp 50-pico-usb-display.rules /etc/udev/rules.d/
+sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 
 # 然后重新加载 udev 规则
 sudo udevadm control --reload-rules && sudo udevadm trigger
@@ -163,6 +163,7 @@ ffplay ./jazz.mp4
 - [解码器与帧流水线](./notes/decoders.md)（含 EP1 流控）
 - [构建与烧录](./notes/build-and-flash.md)
 - [调试](./notes/debugging.md)
+- [用户空间工具](./notes/scripts.md)
 - [踩坑合集](./notes/pitfalls.md)
 
 ## 本项目使用的开源软件

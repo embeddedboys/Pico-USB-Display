@@ -12,6 +12,7 @@
 | [decoders.md](decoders.md) | 解码器抽象、QOI 解码、帧槽与**流控**（重点） |
 | [build-and-flash.md](build-and-flash.md) | RP2350 构建、CMSIS-DAP 烧录、配置项说明 |
 | [debugging.md](debugging.md) | gdb/OpenOCD 调试、HardFault 定位、解码统计计数器 |
+| [scripts.md](scripts.md) | 用户空间工具：共享模块、依赖选型、各脚本用法与实测带宽 |
 | [pitfalls.md](pitfalls.md) | 踩坑合集：ISR 里解码、PIO/DMA 卡死、RAM 预算、bootlogo 数组 |
 
 ## 相关仓库

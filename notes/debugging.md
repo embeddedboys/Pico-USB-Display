@@ -135,6 +135,47 @@ calling freertos scheduler, <us>
 `Decoder type:` 这行会暴露 `decoder_names[]` 的越界问题
 （若 `DECODER_TYPE` 超出数组范围，这里会是乱码或崩溃）。
 
+## 全刷 / 局刷 FPS 基准
+
+> 完整的脚本清单、共享模块与依赖选型见 [scripts.md](scripts.md)。
+
+`scripts/fps_bench.py` 是主机端**端到端**基准：计时段只包含 EP0 控制请求 + EP1
+批量传输，帧编码在计时前预先生成、不计入，所以数字反映的是链路 + 设备，而不是 Python。
+
+它要求设备**没有被 `pud` 驱动占用**（pyusb 需要 claim 接口）：
+
+```bash
+sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/   # 装一次，之后免 root
+sudo rmmod pud
+./scripts/fps_bench.py --frames 200
+```
+
+不带设备也能先看各用例的载荷大小：
+
+```bash
+./scripts/fps_bench.py --dry-run
+```
+
+用例与关注点：
+
+| 用例 | 说明 |
+| --- | --- |
+| `full / solid,gradient,photo,noise` | 全刷四档内容，QOI 体积从 2.5 KB 到 444 KB |
+| `full / <pattern> (单次传输)` | 整帧能装进一次传输时，对比消耗在"驱动分带规则"上的开销 |
+| `partial / 64x64, 128x64, 480x8` | 固定居中窗口，内容逐帧变化 |
+
+输出里两个值最关键：
+
+- **`min`** —— 最快的一帧。此时设备空闲（两个帧槽都是空的），所以它≈**纯 USB 传输**上限。
+- **`median`** —— 稳态周期。`median / min` 比值大说明**瓶颈在设备侧**（解码/刷屏）；
+  接近 1 说明**瓶颈在 USB 带宽**。
+
+编码器与固件/驱动共用的 `rgb565_qoi.c` **逐字节一致**（已用 solid/gradient/noise/run
+四类图案对照 C 输出验证），所以这里量到的字节数就是驱动实际会发的字节数。
+
+> 注意：测 `480x320` 全刷时驱动规则会切成 **8 段**（`21839 / 480 = 45` 行/段，
+> `ceil(320/45) = 8`）。photo/noise 的整帧流超过固件帧槽 64 KB，**必须**分带。
+
 ## 复位后的枚举
 
 用 `monitor reset run` 重启固件后，主机会看到一次 USB disconnect + connect，
