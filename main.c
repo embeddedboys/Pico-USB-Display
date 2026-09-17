@@ -52,8 +52,11 @@ void vApplicationTickHook()
 
 static portTASK_FUNCTION(bootlogo_task_handler, pvParameters)
 {
+	/* Serialise with decoder_task: both drive the same panel. */
+	mutex_enter_blocking(&decoder_mutex);
 	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
 			(uint8_t *)bootlogo, sizeof(bootlogo));
+	mutex_exit(&decoder_mutex);
 
 	busy_wait_ms(10);
 	backlight_set_level(100);
@@ -84,10 +87,9 @@ static portTASK_FUNCTION(usb_task_handler, pvParameters)
 	usb_device_init();
 
 	while (!usb_is_configured())
-		;
+		vTaskDelay(pdMS_TO_TICKS(1));
 
-	for (;;)
-		tight_loop_contents();
+	vTaskSuspend(NULL);
 }
 
 int main(void)

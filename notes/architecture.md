@@ -62,15 +62,39 @@ main()                                        main.c
 
 | 任务 | 栈 | 优先级 | 核 | 职责 |
 | --- | --- | --- | --- | --- |
-| `usb_task` | 256 | idle + 3 | core 0 | `usb_device_init()`，等待枚举完成后空转；USB 中断处理回调 |
-| `bootlogo_task` | 256 | idle + 2 | core 1 | 开机 logo（用当前解码器格式内嵌在 `include/bootlogo.h`） |
-| `indev_read` | 256 | idle + 0 | — | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建） |
-| `decoder_task` | **4096** | idle + 1 | — | 真正的解码 + 刷屏（在 `decoder_init()` 里创建） |
+| `usb_task` | 256 | idle + 3 | core 0（绑定） | `usb_device_init()`，等枚举完成后 **`vTaskSuspend(NULL)`**；USB 中断处理回调 |
+| `bootlogo_task` | 256 | idle + 2 | core 1（绑定） | 开机 logo（用当前解码器格式内嵌在 `include/bootlogo.h`），画完自删 |
+| `indev_read` | 256 | idle + 0 | 未绑定 | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建），每 33 ms 一次 |
+| `decoder_task` | **4096** | idle + 1 | 未绑定 | 真正的解码 + 刷屏（在 `decoder_init()` 里创建） |
 
 `decoder_task` 的栈明显大于其它任务，因为解码过程（尤其 JPEGDEC）吃栈。
 
-> **两核分工**：`usb_task` 绑 core 0，`bootlogo_task` 绑 core 1。
-> `decoder_task` 未绑定（两个核都可能调度到它）。
+### 核分配：让调度器自己分，别手工绑
+
+`usb_task` 曾经是 `for (;;) tight_loop_contents();` —— 反汇编就是一条 `b.n` 自跳，
+**不阻塞、也不带 `wfi`**。它绑在 core 0 且优先级 `idle+3`，高于 `decoder_task`
+（`idle+1`），于是永远 ready 的它把 core 0 整块占死，任何更低优先级的任务都上不了核 0。
+
+改成枚举完成后 `vTaskSuspend(NULL)`（USB 栈本身就靠中断跑，`irq_set_enabled` 是在
+core 0 上做的，挂起任务不影响中断），两个核的分工立刻由 SMP 调度器自动理顺。
+
+实测（480×320 全屏纯色，每侧 3 次 × 100 帧，两侧都极稳 ±0.03 ms）：
+
+| 版本 | 稳态 | 变化 |
+| --- | --- | --- |
+| 空转（改前） | 5.94 ms（168 fps） | — |
+| **只去掉空转** | **5.06 ms（198 fps）** | **−14.8%** |
+| 去掉空转 + 解码绑核 1 + indev 绑核 0 | 5.17 ms | −13.0% |
+
+**结论：收益几乎全部来自"去掉空转"，而手工绑核反而慢约 2%。** core 0 一旦空闲，
+调度器自己就会把低优先级任务搬过去；手工绑定限制了它的自由度。所以最终只做了
+"挂起取代空转"，没有改任何亲和性，也没有改优先级（现有的
+`decoder(1) > indev(0)`、全部低于 timer task 已经够用）。
+
+> 教训：发现某个核"被浪费"时，先看是不是有个**永不阻塞**的任务占着它，
+> 而不是急着给别的任务绑核。
+
+`bootlogo_task` 画 logo 时会持有 `decoder_mutex` —— 它和 `decoder_task` 驱动同一块面板。
 
 ## 目录结构
 
