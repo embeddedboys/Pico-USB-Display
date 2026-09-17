@@ -1,107 +1,91 @@
 #!/usr/bin/env python3
 
 #
-# Copyright (c) 2024 embeddedboys developers
-#
-# Copyright (c) 2020 Raspberry Pi (Trading) Ltd. author of https://github.com/raspberrypi/pico-examples/tree/master/usb
+# Copyright (c) 2026 embeddedboys developers
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
 
-# sudo pip3 install pyusb
+'''
+Display a still image on the Pico USB Display.
 
+Images are decoded with Pillow (or opencv-python if Pillow is missing),
+converted to RGB565, compressed with QOI and sent over EP1 -- the same
+pipeline the kernel driver uses.
+
+Requires firmware built with DECODER_TYPE=3 (QOI), which is the default.
+
+Usage:
+    ./scripts/img_viewer.py [options] <image>
+
+Options:
+    --xres W        panel width  (default 480)
+    --yres H        panel height (default 320)
+    --width W       image window width  (default: the panel width)
+    --height H      image window height (default: the panel height)
+    --x X, --y Y    place the window at (X,Y) instead of the top-left corner
+    --stretch       fill the window instead of preserving the aspect ratio
+    --repeat N      send the frame N times (default 1)
+    --timer         print per-send timing
+
+Examples:
+    ./scripts/img_viewer.py assets/xfce.jpg
+    ./scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 \\
+        assets/bootlogo.jpg
+'''
+
+import argparse
 import os
 import sys
-import cv2
 
-import usb.core
-import usb.util
-import datetime
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pud_usb
 
-# JPEG quality for compression (1 to 100, higher is better quality)
-JPEG_QUALITY = 50
-
-EP_DIR_OUT = 0x00
-EP_DIR_IN = 0X80
-TYPE_VENDOR = 0X40
-
-EP1_OUT_ADDR = (EP_DIR_OUT | 0x01)
-
-REQ_EP0_OUT = 0X00
-REQ_EP0_IN = 0X01
-REQ_EP1_OUT = 0X02
-REQ_EP2_IN = 0X03
-
-# where the image will be writen to
-x = 0
-y = 0
-
-def swap(a, b):
-    tmp = a
-    a = b
-    b = tmp
-    return a, b
-
-def create_ep1_control_buffer(xs, ys, xe, ye, size) -> list:
-    # print(f"xs: {xs}, ys: {ys}, xe: {xe}, ye: {ye}, size: {size}")
-    return [
-        xs & 0xff, (xs >> 8) & 0xff,
-        ys & 0xff, (ys >> 8) & 0xff,
-        xe & 0xff, (xe >> 8) & 0xff,
-        ye & 0xff, (ye >> 8) & 0xff,
-        (size >> 16) & 0xFF, (size >> 24) & 0xFF,
-        size & 0xFF, (size >> 8) & 0xFF
-    ]
 
 def main():
-    TARGET_WIDTH = 480
-    TARGET_HEIGHT = 320
+    ap = argparse.ArgumentParser(description="show an image on the panel")
+    ap.add_argument("image")
+    ap.add_argument("--xres", type=int, default=480, help="panel width")
+    ap.add_argument("--yres", type=int, default=320, help="panel height")
+    ap.add_argument("--width", type=int, default=None, help="window width")
+    ap.add_argument("--height", type=int, default=None, help="window height")
+    ap.add_argument("--x", type=int, default=0, help="window origin x")
+    ap.add_argument("--y", type=int, default=0, help="window origin y")
+    ap.add_argument("--stretch", action="store_true",
+                    help="stretch to the window instead of letterboxing")
+    ap.add_argument("--repeat", "-r", type=int, default=1)
+    ap.add_argument("--timer", action="store_true")
+    args = ap.parse_args()
 
-    if len(sys.argv) < 2:
-        print("Usage: sudo {} [xres] [yres] <file.jpg>".format(sys.argv[0]))
-        sys.exit(1)
+    if args.repeat < 1:
+        sys.exit("--repeat must be >= 1")
 
-    if len(sys.argv) == 3:
-        TARGET_WIDTH = int(sys.argv[1])
-    elif len(sys.argv) == 4:
-        TARGET_WIDTH = int(sys.argv[1])
-        TARGET_HEIGHT = int(sys.argv[2])
+    win_w = args.width or args.xres
+    win_h = args.height or args.yres
 
-    hor_res = TARGET_WIDTH
-    ver_res = TARGET_HEIGHT
-    print(hor_res, ver_res)
+    try:
+        raw = pud_usb.load_image(args.image, win_w, win_h,
+                                 fit=not args.stretch)
+        rgb565 = pud_usb.rgb888_to_rgb565(raw, win_w, win_h)
 
-    img = cv2.imread(sys.argv[-1])
-    height, width, channels = img.shape
-    print("Raw image size: {}x{}".format(width, height))
+        with pud_usb.open_device() as disp:
+            disp.width, disp.height = args.xres, args.yres
+            total = 0
+            for _ in range(args.repeat):
+                bands, nbytes, secs = disp.send_rgb565(
+                    rgb565, win_w, win_h, args.x, args.y)
+                total += nbytes
+                if args.timer or args.repeat == 1:
+                    print("sent %d band(s), %d bytes in %.1f ms (%.2f MB/s)"
+                          % (bands, nbytes, secs * 1e3,
+                             nbytes / secs / 1e6 if secs else 0))
+            if args.repeat > 1:
+                print("%d frames, %d bytes total" % (args.repeat, total))
+    except pud_usb.PudError as exc:
+        sys.exit(str(exc))
+    except KeyboardInterrupt:
+        pass
 
-    # if width < height:
-    #     hor_res, ver_res = swap(hor_res, ver_res)
-    #     img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-    img = cv2.resize(img, (hor_res, ver_res))
-    cv2.imwrite("/tmp/.preview.jpg", img, [
-        cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY,
-        cv2.IMWRITE_JPEG_OPTIMIZE, 1,
-    ])
-
-    with open("/tmp/.preview.jpg", "rb") as f:
-        pic = f.read()
-        if len(pic) % 2 != 0:
-            pic = pic + b'\xff'
-
-        size = len(pic)
-        print(f"dst image size : {hor_res}x{ver_res},", size, "(Bytes)")
-        control_buffer = create_ep1_control_buffer(x, y, x + hor_res - 1, y + ver_res - 1, size)
-        dev = usb.core.find(idVendor=0x2E8A, idProduct=0x0001)
-        if dev is None:
-            raise ValueError('Device not found')
-        dev.ctrl_transfer(TYPE_VENDOR | EP_DIR_OUT, REQ_EP1_OUT, 0, 0, control_buffer)
-        start = datetime.datetime.now()
-        dev.write(EP1_OUT_ADDR, pic)
-        end = datetime.datetime.now()
-        elapsed = end - start
-        print("frame took {} ms".format(elapsed.microseconds / 1000))
 
 if __name__ == "__main__":
     main()

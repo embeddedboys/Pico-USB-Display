@@ -1,126 +1,183 @@
 #!/usr/bin/env python3
 
 #
+# Copyright (c) 2026 embeddedboys developers
+#
 # Copyright (c) 2020 2024 Daniel Gorbea
 #
 # Copyright (c) 2020 Raspberry Pi (Trading) Ltd. author of https://github.com/raspberrypi/pico-examples/tree/master/usb
 #
 # Copyright (c) 2025 Liyulingyue
-# 
-# Copyright (c) 2025-2026 Wooden Chair <hua.zheng@embeddedboys.com>
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #
 
-# sudo pip3 install pyusb
+'''
+Mirror an X11 screen onto the Pico USB Display.
 
+The screen is grabbed with ffmpeg's x11grab, so no python X binding is
+needed (the previous version imported Xlib and opened a fresh Display every
+frame, which leaked a connection per frame). Only the bounding box of what
+actually changed is sent, so a mostly static desktop costs almost nothing
+and full-screen video is limited by the link rather than by the sender.
+
+Requires firmware built with DECODER_TYPE=3 (QOI), which is the default.
+
+Usage:
+    ./scripts/xorg_desktop_share.py [options]
+
+Options:
+    --xres W, --yres H   panel size (default 480x320)
+    --fps N              capture rate (default 15)
+    --display D          X display (default $DISPLAY)
+    --stretch            stretch to the panel instead of letterboxing
+    --no-diff            always send the whole frame
+    --frames N           stop after N frames
+    --stats              print a line every second
+
+x11grab only works on X11. On a Wayland session run the compositor's own
+screencast tool, or use a nested X server (Xephyr/Xwayland) to share.
+
+Examples:
+    ./scripts/xorg_desktop_share.py --fps 10
+    ./scripts/xorg_desktop_share.py --stretch --stats
+'''
+
+import argparse
 import os
 import sys
 import time
 
-import cv2
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pud_usb
 
-import usb.core
-import usb.util
-import datetime
 
-from Xlib import X, display
-import numpy as np
+def changed_bbox(old, new, width, height):
+    """Smallest (x1, y1, x2, y2) covering every changed pixel, or None.
 
-EP_DIR_OUT = 0x00
-EP_DIR_IN = 0X80
-TYPE_VENDOR = 0X40
+    Comparison works on the packed RGB565 bytes; identical rows are rejected
+    with a single C-level bytes compare.
+    """
+    stride = width * 2
+    first = -1
+    last = -1
+    for y in range(height):
+        if old[y * stride:(y + 1) * stride] != new[y * stride:(y + 1) * stride]:
+            if first < 0:
+                first = y
+            last = y
+    if first < 0:
+        return None
 
-EP1_OUT_ADDR = (EP_DIR_OUT | 0x01)
+    try:
+        import numpy as np
 
-REQ_EP0_OUT = 0X00
-REQ_EP0_IN = 0X01
-REQ_EP1_OUT = 0X02
-REQ_EP2_IN = 0X03
+        a = np.frombuffer(old, np.uint8).reshape(height, width * 2)
+        b = np.frombuffer(new, np.uint8).reshape(height, width * 2)
+        cols = np.flatnonzero((a[first:last + 1] != b[first:last + 1]).any(axis=0))
+        return int(cols[0]) // 2, first, int(cols[-1]) // 2, last
+    except ImportError:
+        pass
 
-# where the image will be writen to
-x = 0
-y = 0
+    x1, x2 = width, -1
+    for y in range(first, last + 1):
+        a = old[y * stride:(y + 1) * stride]
+        b = new[y * stride:(y + 1) * stride]
+        if a == b:
+            continue
+        va = memoryview(a).cast("H")
+        vb = memoryview(b).cast("H")
+        for x in range(width):
+            if va[x] != vb[x]:
+                if x < x1:
+                    x1 = x
+                if x > x2:
+                    x2 = x
+    if x2 < 0:
+        return None
+    return x1, first, x2, last
 
-def create_ep1_control_buffer(xs, ys, xe, ye, size) -> list:
-    # print(f"xs: {xs}, ys: {ys}, xe: {xe}, ye: {ye}, size: {size}")
-    return [
-        xs & 0xff, (xs >> 8) & 0xff,
-        ys & 0xff, (ys >> 8) & 0xff,
-        xe & 0xff, (xe >> 8) & 0xff,
-        ye & 0xff, (ye >> 8) & 0xff,
-        (size >> 16) & 0xFF, (size >> 24) & 0xFF,
-        size & 0xFF, (size >> 8) & 0xFF
-    ]
 
-def get_screen_pixels():
-    d = display.Display()
-    root = d.screen().root
-    geom = root.get_geometry()
-    width, height = geom.width, geom.height
+def grab_cmd(display, width, height, fps, stretch):
+    filters = ["fps=%s" % fps]
+    if stretch:
+        filters.append("scale=%d:%d" % (width, height))
+    else:
+        filters.append("scale=%d:%d:force_original_aspect_ratio=decrease"
+                       % (width, height))
+        filters.append("pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black"
+                       % (width, height))
+    return ["ffmpeg", "-v", "error", "-f", "x11grab",
+            "-i", display, "-vf", ",".join(filters),
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
 
-    # 获取原始像素数据（X11 默认格式为 BGRA）
-    raw_data = root.get_image(0, 0, width, height, X.ZPixmap, 0xffffffff).data
-
-    # 转换为 numpy 数组 (height, width, 4)
-    frame = np.frombuffer(raw_data, dtype=np.uint8).reshape((height, width, 4))
-
-    # 提取 RGB 通道（丢弃 Alpha 通道）
-    rgb_frame = frame[:, :, :3]  # shape: (height, width, 3)
-    return rgb_frame
 
 def main():
-    TARGET_WIDTH = 480
-    TARGET_HEIGHT = 320
-    JPEG_QUALITY = 50
+    ap = argparse.ArgumentParser(description="mirror an X11 screen to the panel")
+    ap.add_argument("--xres", type=int, default=480)
+    ap.add_argument("--yres", type=int, default=320)
+    ap.add_argument("--fps", type=float, default=15.0)
+    ap.add_argument("--display", default=os.environ.get("DISPLAY", ":0.0"))
+    ap.add_argument("--stretch", action="store_true")
+    ap.add_argument("--no-diff", action="store_true")
+    ap.add_argument("--frames", type=int, default=None)
+    ap.add_argument("--stats", action="store_true")
+    args = ap.parse_args()
 
-    print("Usage: sudo {} [xres] [yres] [quality]".format(sys.argv[0]))
+    if not os.environ.get("DISPLAY"):
+        print("note: DISPLAY is not set (session type: %s) -- x11grab needs an "
+              "X server; pass --display if it lives elsewhere"
+              % os.environ.get("XDG_SESSION_TYPE", "unknown"),
+              file=sys.stderr)
 
-    if len(sys.argv) == 2:
-        TARGET_WIDTH = int(sys.argv[1])
-    elif len(sys.argv) == 3:
-        TARGET_WIDTH = int(sys.argv[1])
-        TARGET_HEIGHT = int(sys.argv[2])
-    elif len(sys.argv) == 4:
-        TARGET_WIDTH = int(sys.argv[1])
-        TARGET_HEIGHT = int(sys.argv[2])
-        JPEG_QUALITY = int(sys.argv[3])
+    cmd = grab_cmd(args.display, args.xres, args.yres, args.fps, args.stretch)
 
-    hor_res = TARGET_WIDTH
-    ver_res = TARGET_HEIGHT
-    print(f"xres:{hor_res}, yres:{ver_res}, quality:{JPEG_QUALITY}")
+    try:
+        with pud_usb.open_device() as disp:
+            disp.width, disp.height = args.xres, args.yres
+            prev = None
+            sent = 0
+            t0 = time.perf_counter()
+            t_report = t0
+            bytes_sent = 0
 
-    dev = usb.core.find(idVendor=0x2E8A, idProduct=0x0001)
-    if dev is None:
-        raise ValueError('Device not found')
+            for raw in pud_usb.ffmpeg_frames(cmd, args.xres, args.yres):
+                cur = pud_usb.rgb888_to_rgb565(raw, args.xres, args.yres)
 
-    while True:
-        a = datetime.datetime.now()
+                if args.no_diff or prev is None:
+                    box = (0, 0, args.xres - 1, args.yres - 1)
+                else:
+                    box = changed_bbox(prev, cur, args.xres, args.yres)
 
-        screen_data = get_screen_pixels()
-        img = screen_data
-        # width, height = img.shape[:2]
-        # print("Raw image size: {}x{}".format(width, height))
+                prev = cur
+                if box is None:
+                    continue
 
-        img = cv2.resize(img, (TARGET_WIDTH, TARGET_HEIGHT))
+                x1, y1, x2, y2 = box
+                w, h = x2 - x1 + 1, y2 - y1 + 1
+                patch = pud_usb.crop_rgb565(cur, args.xres, x1, y1, w, h)
+                _, nbytes, _ = disp.send_rgb565(patch, w, h, x1, y1)
+                bytes_sent += nbytes
+                sent += 1
 
-        _, jpeg_data = cv2.imencode(
-            ".jpg",
-            img,
-            [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-        )
-        pic = jpeg_data.tobytes()  # 转换为 bytes 对象
-        size = len(pic)
+                if args.stats and time.perf_counter() - t_report >= 1.0:
+                    el = time.perf_counter() - t0
+                    print("%4d frames, %.1f fps, %.2f MB/s, last %dx%d at %d,%d"
+                          % (sent, sent / el, bytes_sent / el / 1e6,
+                             w, h, x1, y1))
+                    t_report = time.perf_counter()
 
-        control_buffer = create_ep1_control_buffer(x, y, x + hor_res - 1, y + ver_res - 1, size)
-        dev.ctrl_transfer(TYPE_VENDOR | EP_DIR_OUT, REQ_EP1_OUT, 0, 0, control_buffer)
+                if args.frames and sent >= args.frames:
+                    break
 
-        dev.write(EP1_OUT_ADDR, pic)
-        b = datetime.datetime.now()
-        c = b - a
-        fps = 1000000 / c.microseconds
-        print("{:.2f} fps".format(fps))
-        # time.sleep(0.01)
+            el = time.perf_counter() - t0
+            print("%d frames in %.1f s -> %.1f fps, %.2f MB/s"
+                  % (sent, el, sent / el if el else 0,
+                     bytes_sent / el / 1e6 if el else 0))
+    except pud_usb.PudError as exc:
+        sys.exit(str(exc))
+    except KeyboardInterrupt:
+        print("\nstopped")
 
 
 if __name__ == "__main__":

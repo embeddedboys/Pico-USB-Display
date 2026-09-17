@@ -1,94 +1,93 @@
 #!/usr/bin/env python3
 
-# pip install pillow numpy lz4 pyusb
+#
+# Copyright (c) 2026 embeddedboys developers
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
 
-from PIL import Image
-import numpy as np
-import lz4.block
-import usb.core
-import datetime
-import sys
+'''
+Display an image with the LZ4 decoder.
+
+Requires firmware built with DECODER_TYPE=2 (LZ4), which is NOT the default
+-- QOI (DECODER_TYPE=3) is the default and has its own viewer.
+
+Two limits come from the firmware side and are checked here rather than
+silently truncating the frame:
+
+  * lz4_drawimg() decompresses the whole stream into a full-frame workspace
+    and then flushes the window, so only whole-panel frames are supported;
+  * the compressed stream has to fit one transfer (65535 bytes) and thus the
+    firmware's 64 KB frame slot.
+
+A 480x320 RGB565 frame is 307200 raw bytes, so LZ4 has to reach better than
+5:1 for this to work -- fine for flat graphics, usually not for photos.
+
+Usage:
+    ./scripts/lz4_img_viewer.py [options] <image>
+
+Options:
+    --xres W, --yres H   panel size (default 480x320)
+    --repeat N           send the frame N times (default 1)
+    --stretch            stretch to the panel instead of letterboxing
+
+Requires the python lz4 package:
+    pip install lz4
+'''
+
+import argparse
 import os
+import sys
 
-EP_DIR_OUT = 0x00
-EP_DIR_IN = 0X80
-TYPE_VENDOR = 0X40
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pud_usb
 
-EP1_OUT_ADDR = (EP_DIR_OUT | 0x01)
 
-REQ_EP0_OUT = 0X00
-REQ_EP0_IN = 0X01
-REQ_EP1_OUT = 0X02
-REQ_EP2_IN = 0X03
+def main():
+    ap = argparse.ArgumentParser(description="show an image via the LZ4 decoder")
+    ap.add_argument("image")
+    ap.add_argument("--xres", type=int, default=480)
+    ap.add_argument("--yres", type=int, default=320)
+    ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--stretch", action="store_true")
+    args = ap.parse_args()
 
-x = 0
-y = 0
+    try:
+        import lz4.block
+    except ImportError:
+        sys.exit("the lz4 package is required: pip install lz4")
 
-def rgb888_to_rgb565_le(r, g, b):
-    # RGB565: R(5bit) G(6bit) B(5bit)
-    r, g, b = int(r), int(g), int(b)
-    rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-    return [rgb565 & 0xFF, (rgb565 >> 8) & 0xFF]
+    try:
+        raw = pud_usb.load_image(args.image, args.xres, args.yres,
+                                 fit=not args.stretch)
+        rgb565 = pud_usb.rgb888_to_rgb565(raw, args.xres, args.yres)
 
-def jpg_to_rgb565_le(jpg_path) -> list:
-    img = Image.open(jpg_path).convert("RGB")
-    width, height = img.size
-    print(f"image width: {width}, height: {height}")
-    pixels = np.array(img)
+        # store_size=False gives the bare LZ4 block the firmware expects; the
+        # decompressed length is implied by the window instead.
+        payload = lz4.block.compress(rgb565, store_size=False)
 
-    data = bytearray()
+        print("raw %d bytes, lz4 %d bytes (%.2f:1)"
+              % (len(rgb565), len(payload), len(rgb565) / len(payload)))
 
-    for y in range(height):
-        for x in range(width):
-            r, g, b = pixels[y, x]
-            lb, hb = rgb888_to_rgb565_le(r, g, b)
-            data.append(lb)
-            data.append(hb)
-    return [width, height, data]
+        if len(payload) > pud_usb.USB_TRANS_MAX_SIZE:
+            sys.exit("compressed frame is %d bytes, over the %d byte transfer "
+                     "limit -- the firmware cannot take a frame this size. "
+                     "Use a smaller panel size or simpler content."
+                     % (len(payload), pud_usb.USB_TRANS_MAX_SIZE))
 
-def create_ep1_control_buffer(xs, ys, xe, ye, size) -> list:
-    print(f"xs: {xs}, ys: {ys}, xe: {xe}, ye: {ye}, size: {size}")
-    return [
-        xs & 0xff, (xs >> 8) & 0xff,
-        ys & 0xff, (ys >> 8) & 0xff,
-        xe & 0xff, (xe >> 8) & 0xff,
-        ye & 0xff, (ye >> 8) & 0xff,
-        (size >> 16) & 0xFF, (size >> 24) & 0xFF,
-        size & 0xFF, (size >> 8) & 0xFF
-    ]
+        with pud_usb.open_device() as disp:
+            for i in range(args.repeat):
+                nbytes, secs = disp.send_raw(payload, 0, 0, args.xres - 1,
+                                             args.yres - 1)
+                if args.repeat == 1:
+                    print("sent %d bytes in %.1f ms" % (nbytes, secs * 1e3))
+            if args.repeat > 1:
+                print("%d frames sent" % args.repeat)
+    except pud_usb.PudError as exc:
+        sys.exit(str(exc))
+    except KeyboardInterrupt:
+        pass
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: {} <file.jpg>".format(sys.argv[0]))
-        sys.exit(1)
 
-    width, height, data = jpg_to_rgb565_le(sys.argv[1])
-
-    lz4_data : bytes = lz4.block.compress(data)
-    lz4_data = lz4_data[4:] # Remove lz4 block header
-    with open("/tmp/lz4_data.bin", "wb") as f:
-        f.write(lz4_data)
-        f.close()
-
-    lz4_size = len(lz4_data)
-    print("orig:", len(data), "bytes")
-    print("lz4 : ", lz4_size, "bytes")
-    print("ratio:", lz4_size / len(data))
-
-    dev = usb.core.find(idVendor=0x2E8A, idProduct=0x0001)
-    if dev is None:
-        raise ValueError('Device not found')
-
-    control_buffer = create_ep1_control_buffer(x, y, x + width - 1, y + height - 1, lz4_size)
-    print(control_buffer)
-    dev.ctrl_transfer(TYPE_VENDOR | EP_DIR_OUT, REQ_EP1_OUT, 0, 0, control_buffer)
-    start = datetime.datetime.now()
-    dev.write(EP1_OUT_ADDR, lz4_data)
-    end = datetime.datetime.now()
-    elapsed = end - start
-    print("frame time : {:.2f} ms".format(elapsed.microseconds / 1000))
-
-    pass
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

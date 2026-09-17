@@ -1,35 +1,58 @@
 #!/usr/bin/env python3
 
+#
+# Copyright (c) 2026 embeddedboys developers
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+
+'''
+Exercise the EP2 query channel.
+
+The host sends a 4-byte request (u16 cmd, u16 size, little-endian) as a
+vendor control request, then reads the reply from the EP2 bulk IN endpoint.
+The only command implemented today is CMD_GET_SN = 0x01, which returns the
+8-byte board unique id.
+
+Usage:
+    ./scripts/ep2_protocal_test.py [--repeat N] [--raw]
+
+Exit status is non-zero if the device is missing or a reply has the wrong
+length, so this is usable as a smoke test in a script.
+'''
+
+import argparse
 import os
 import sys
 import time
 
-import usb.core
-import usb.util
-import datetime
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pud_usb
 
-EP_DIR_OUT = 0x00
-EP_DIR_IN = 0X80
-TYPE_VENDOR = 0X40
 
-EP1_OUT_ADDR = (EP_DIR_OUT | 0x01)
-EP2_IN_ADDR = (EP_DIR_IN | 0x02)
+def main():
+    ap = argparse.ArgumentParser(description="EP2 query channel test")
+    ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--raw", action="store_true", help="print raw bytes")
+    args = ap.parse_args()
 
-REQ_EP0_OUT = 0X00
-REQ_EP0_IN = 0X01
-REQ_EP1_OUT = 0X02
-REQ_EP2_IN = 0X03
+    try:
+        with pud_usb.open_device() as disp:
+            for _ in range(args.repeat):
+                t0 = time.perf_counter()
+                sn = disp.get_sn()
+                dt = (time.perf_counter() - t0) * 1e3
 
-def create_ctrl_buf(cmd, len):
-	return [cmd & 0xff, cmd >> 8, len & 0xff, len >> 8]
+                if len(sn) != 8:
+                    sys.exit("bad reply length: got %d, want 8" % len(sn))
 
-dev = usb.core.find(idVendor=0x2E8A, idProduct=0x0001)
-if dev is None:
-    raise ValueError('Device not found')
+                printable = "".join(chr(c) if 32 <= c < 127 else "." for c in sn)
+                print("sn: 0x%s  '%s'  (%.1f ms)%s"
+                      % (sn.hex(), printable, dt,
+                         "  raw=" + str(list(sn)) if args.raw else ""))
+    except pud_usb.PudError as exc:
+        sys.exit(str(exc))
 
-ctrl_buf = create_ctrl_buf(0x01, 8);
-print(ctrl_buf, len(ctrl_buf))
 
-dev.ctrl_transfer(TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0, ctrl_buf)
-data = dev.read(EP2_IN_ADDR, 8);
-print(data)
+if __name__ == "__main__":
+    main()
