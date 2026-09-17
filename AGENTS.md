@@ -1,0 +1,111 @@
+# AGENTS.md
+
+本仓库的工作规则，供 AI agent（以及人）在改动前先读一遍。
+
+**详细知识在 [`notes/`](notes/README.md)**：本文只写"必须遵守的约束"和入口，
+不重复细节，以免每次会话都吃掉大量上下文。
+
+---
+
+## 铁律
+
+1. **未经明确指令，不要 `git commit`，更不要 `git push`。**
+   改完先报告改了什么、验证到什么程度，等指令。
+   （曾经把"告诉你提交者身份"误解成"让你提交"，多做了事。）
+2. **构建必须用 `build-pico2/`**（`PICO_BOARD=pico2` / RP2350）。
+   仓库根的 `build/` 是 RP2040 配置，烧到 Pico 2 上跑不起来。
+3. **仓库内不得出现内网/个人信息**：本机绝对路径、内网 IP、口令、内部代号。
+4. **不要把解码放进 USB 中断**（会 HardFault，见"架构不变量"）。
+5. **不要去掉 EP1 流控**（那是局部刷新残影的修法，见"架构不变量"）。
+
+## 提交与身份
+
+- `user.name` = `Wooden Chair`，`user.email` = `hua.zheng@embeddedboys.com`
+- **提交一律带 `Signed-off-by`**：用 `git commit -s`（仓库既有历史都带 sign-off）
+- 提交信息用**内核风格**：`模块: 组件: 简述`，正文写清具体改了什么、为什么、效果；
+  一个逻辑改动一个提交，不要把互不相关的改动塞进同一个提交
+- 默认分支 `main`；子模块指针改动要和子模块提交一起考虑
+
+## 构建与烧录
+
+```bash
+cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
+```
+
+- 子模块要 `--recursive`（CherryUSB / lz4 / pico-display-lib / FreeRTOS-Kernel
+  及其 ports）。直连 GitHub 失败时，"走代理 + `git -c http.version=HTTP/1.1`"
+  是验证过可行的组合（`ghproxy`/`gitee` 镜像不可用）。
+- 烧录：OpenOCD 跑在 **Windows 宿主机**（WSL 看不到调试器，也无法 `mknod`
+  出 `/dev/bus/usb`），WSL 侧用
+  `gdb-multiarch -q -nh -ex "target extended-remote localhost:3333"`。
+  `-q -nh` 是必需的（否则会读 `~/.gdbinit`，装了 gef 之类会直接报错中断）。
+- **只读检查固件状态时，读完要 `monitor resume`**；别用 `monitor reset run`
+  （会清掉计数器和显示状态）。卡死时复位才用它。
+- 细节见 [`notes/build-and-flash.md`](notes/build-and-flash.md) 与
+  [`notes/debugging.md`](notes/debugging.md)。
+
+## 架构不变量（动了就坏）
+
+1. **解码只能在 `decoder_task` 里做。** 在 `usbd_vendor_ep1_bulk_out()`
+   （USB 中断上下文）里解码会因中断栈不足 HardFault（`CFSR` 的 `STKERR`），
+   并且会长时间阻塞 USB 中断。`decoder_task` 栈 4096 words，不要减。
+2. **EP1 流控必须保留。** 帧槽全忙时**故意不武装 EP1**，让主机的 bulk 传输
+   阻塞等待（`usbd_vendor_ep1_defer()` / `usbd_vendor_ep1_tick()`）。
+   判定标准：`g_decoder_stat_dropped == 0`，且 `drawn` 落后 `submitted` 恰好 1 帧。
+   去掉它 = 槽满静默丢帧 = 局部刷新残影。
+3. **RAM 很紧。** 512 KB SRAM 中 `ep1_read_buffer`（128 KB）+
+   `s_frames`（2 × 64 KB）就占了一半。**不要把 `DECODER_FRAME_SLOTS` 或
+   `DECODER_FRAME_MAX` 翻倍**（2 × 128 KB 会溢出）。
+4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
+   它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
+5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读）。
+6. **协议字段改动要成对改驱动**（`REQ_*`、`struct req_ep1_out`、`struct req_ep2_in`），
+   并同步两个仓库的 `notes/usb-protocol.md`。
+7. **异步刷新有缓冲区契约**：`tft_async_video_flush()` 返回时传输仍在进行，
+   `vmem` 在 `tft_async_video_wait()`（或下一次 flush，它会先完成上一个）返回前
+   **不得复用**。QOI 的 `qoi_buf_a/b` 乒乓天然满足；改动解码器或换成单缓冲时
+   必须重新确认这一点。同一时刻只允许一个传输在途。
+8. **`include/bootlogo.h` 是按 `DECODER_TYPE` 分支的 4500+ 行大数组**：
+   用编辑器的精确替换改，**不要用 `sed -i` 之类批处理**
+   （曾因参数列表过长把文件清空，靠 `git checkout` 才恢复）。
+
+## 当前配置（改前先读 notes）
+
+| 配置 | 值 | 说明 |
+| --- | --- | --- |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；用 LZ4 脚本前必须先改成 `2` |
+| `OVERCLOCK_ENABLED` | `0` | 150 MHz，稳定性优先 |
+| `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
+| 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |
+
+## 用户空间工具（`scripts/`）
+
+- **不加载内核驱动就能验证全部功能**（pyusb 直连），比反复 insmod/rmmod 快得多。
+  这是首选的验证方式。
+- **依赖选型**：`pyusb` + `Pillow`（≈3 MB，用来替代 `opencv-python` 的 ≈60 MB）；
+  视频/录屏用 `ffmpeg` CLI；`numpy` **可选**（只影响 RGB565 打包速度）。
+- **只保留一份 QOI 编码器**：`scripts/pud_usb.py`，与固件/驱动的 `rgb565_qoi.c`
+  **逐字节一致**（`python3 scripts/pud_usb.py` 自检）。新脚本必须复用它，
+  不要再写第二份编码器或第二套协议常量。
+- 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
+  **文件名里的 `60-` 不能退回 `50-`** —— 会被
+  `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。
+- 用法与实测数据见 [`notes/scripts.md`](notes/scripts.md)。
+
+## 代码约定
+
+- C 风格见 `.clang-format`；`u8/u16/u32` 是本仓库的类型别名。
+- 新增源文件/目录要加进对应的 `CMakeLists.txt`（`PUD_SOURCES` 或子目录）。
+- **调试打印要算代价**：115200 波特下每行约 1~3 ms，
+  **不要放进每帧路径**。已知例子：EP2 查询路径的 `usb_hexdump` + `USB_LOG_WRN`
+  实测 **9.6 ms/次**；`lz4_drawimg()` 每帧 3 行 `printf` 约 10 ms。
+- 大块缓冲不要每帧 `malloc`（`lz4_drawimg()` 每帧申请 ~307 KB 是待修项）。
+
+## 文档维护
+
+- 知识库在 [`notes/`](notes/README.md)：架构、协议、解码器流水线、构建烧录、
+  调试、用户空间脚本、踩坑。
+- 改了行为就同步对应文档；协议改动要**同时**改驱动仓的镜像文档。
+- **只写已验证的结论**；推测显式标注"未验证"。
+- 文档用中文，命令/路径/标识符保留英文。
+- `README.md` 是中文主文档，`README.en.md` 是英文镜像 —— 改一个就改另一个。
