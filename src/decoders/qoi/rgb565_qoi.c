@@ -374,8 +374,18 @@ size_t rgb565_qoi_decompress(const uint8_t *input,
                     px = (uint16_t)((r << 11) | (g << 5) | b);
                 }
             } else if ((b1 & QOI_MASK_2) == QOI_OP_RUN) {
-                /* --- QOI_OP_RUN: repeat previous pixel --- */
-                run = b1 & QOI_MASK_6;
+                /* --- QOI_OP_RUN: this pixel, then all its repeats --- */
+                size_t reps = (size_t)(b1 & QOI_MASK_6);
+                size_t i;
+                if (reps > (size_t)(px_len - px_pos - 1)) {
+                    reps = (size_t)(px_len - px_pos - 1);
+                }
+                for (i = 0u; i < reps; i++) {
+                    pixels[px_pos + (int)i] = px;
+                }
+                /* the shared 'pixels[px_pos] = px' below writes the (reps+1)th
+                 * one, and the loop's ++ moves past it */
+                px_pos += (int)reps;
             }
             /* else: unknown chunk type — fall through, px unchanged */
 
@@ -506,6 +516,47 @@ size_t rgb565_qoi_decompress_callback(const uint8_t *input,
         }                                                            \
     } while (0)
 
+    /*
+     * Helper macro: emit `n_pixels` copies of one value.
+     *
+     * The generic EMIT_PIXEL path redoes the row-wrap and capacity
+     * bookkeeping for every pixel, which dominates run-heavy content. Filling
+     * each contiguous stretch in a tight inner loop keeps exactly the same
+     * flush points (a stretch stops at the row end and at the buffer end, and
+     * the buffer is flushed as soon as it is full).
+     */
+#define EMIT_RUN(pixel_val, n_pixels)                                \
+    do {                                                             \
+        size_t _left = (n_pixels);                                   \
+        uint16_t _val = (uint16_t)(pixel_val);                       \
+        while (_left > 0u) {                                         \
+            size_t _row   = (size_t)(width - x);                     \
+            size_t _space = buf_capacity - acc_count;                \
+            size_t _n     = _left < _row ? _left : _row;             \
+            size_t _i;                                               \
+            if (_n > _space) {                                       \
+                _n = _space;                                         \
+            }                                                        \
+            if (acc_count == 0u) {                                   \
+                acc_x = x;                                           \
+                acc_y = y;                                           \
+            }                                                        \
+            for (_i = 0u; _i < _n; _i++) {                           \
+                buf[acc_count + _i] = _val;                          \
+            }                                                        \
+            acc_count += _n;                                         \
+            x = (uint16_t)(x + _n);                                  \
+            if (x >= width) {                                        \
+                x = 0u;                                              \
+                y++;                                                 \
+            }                                                        \
+            _left -= _n;                                             \
+            if (acc_count >= buf_capacity) {                         \
+                FLUSH();                                             \
+            }                                                        \
+        }                                                            \
+    } while (0)
+
     /* --- decode --- */
     {
         size_t px_pos;
@@ -568,13 +619,19 @@ size_t rgb565_qoi_decompress_callback(const uint8_t *input,
                     EMIT_PIXEL(px);
                     pixel_count++;
                 } else if ((b1 & QOI_MASK_2) == QOI_OP_RUN) {
-                    /* --- QOI_OP_RUN: repeat previous pixel --- */
-                    run = b1 & QOI_MASK_6;
-                    /* The first repetition is emitted now, subsequent
-                     * ones via the run counter in the next iterations. */
+                    /* --- QOI_OP_RUN: this pixel, then all its repeats --- */
+                    size_t reps = (size_t)(b1 & QOI_MASK_6);
+                    if (reps > (size_t)(px_len - px_pos - 1u)) {
+                        reps = (size_t)(px_len - px_pos - 1u);
+                    }
                     index[qoi_color_hash(px) & 0x3Fu] = px;
                     EMIT_PIXEL(px);
                     pixel_count++;
+                    if (reps > 0u) {
+                        EMIT_RUN(px, reps);
+                        pixel_count += reps;
+                        px_pos += (int)reps;   /* ++ covers the first pixel */
+                    }
                 }
                 /* else: unknown chunk type — fall through, px unchanged */
             }
@@ -585,6 +642,7 @@ size_t rgb565_qoi_decompress_callback(const uint8_t *input,
     }
 
 #undef EMIT_PIXEL
+#undef EMIT_RUN
 #undef FLUSH
 
     /* --- final flush --- */
