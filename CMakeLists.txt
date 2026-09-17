@@ -40,9 +40,10 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # Disable overclocking for stability (RP2350 at default 150 MHz instead of 225 MHz)
 set(OVERCLOCK_ENABLED 0)
 
-# Use the PIO polling path for the I8080 TFT writes instead of DMA: the DMA
-# DREQ interaction with the PIO stalls under load (freezes the display)
-set(PIO_USE_DMA 0)
+# Use the PIO DMA path for the I8080 TFT writes. It was disabled because the
+# DMA DREQ interaction with the PIO appeared to stall under load; re-enabled to
+# re-measure now that back-pressure on EP1 keeps the pipeline calmer.
+set(PIO_USE_DMA 1)
 
 # All the public source files of this project
 set(PUD_SOURCES
