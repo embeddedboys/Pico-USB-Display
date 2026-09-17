@@ -69,6 +69,12 @@ add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 #  3  |  qoi     |  qoi    |
 set(DECODER_TYPE 3)
 
+# Decode / display-path timing counters (g_qoi_stat_* in src/decoders/decoder.c).
+# Cost is two time_us_32() reads per flush batch, so it is off by default;
+# enable it when you want to split a frame into QOI decode and panel write time:
+#   cmake .. -DDECODER_STATS=1
+set(DECODER_STATS 0 CACHE STRING "collect g_qoi_stat_* decode/display timings")
+
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -98,6 +104,7 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
+target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 
 pico_enable_stdio_usb(${PROJECT_NAME} 0)
 pico_enable_stdio_uart(${PROJECT_NAME} 1)

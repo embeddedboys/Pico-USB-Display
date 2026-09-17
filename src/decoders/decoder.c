@@ -28,6 +28,8 @@
 #include "lz4.h"
 #include "usb.h"
 
+#include "pico/time.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
@@ -197,15 +199,51 @@ struct qoi_draw_ctx {
 	uint16_t oy;
 };
 
+/* Optional decode/display timing counters (see DECODER_STATS in the top level
+ * CMakeLists.txt). Off by default; read them with gdb, e.g.
+ *
+ *   printf "%u %u %u %u %u\n", g_qoi_stat_draw_us, g_qoi_stat_flush_us, ...
+ *
+ * Within one gdb session they only ever increase, so measure a delta around a
+ * known workload. */
+#if DECODER_STATS
+volatile u32 g_qoi_stat_draw_us;   /* whole qoi_drawimg() */
+volatile u32 g_qoi_stat_flush_us;  /* time inside tft_video_flush() */
+volatile u32 g_qoi_stat_pixels;    /* pixels flushed */
+volatile u32 g_qoi_stat_calls;     /* qoi_flush() calls */
+volatile u32 g_qoi_stat_frames;    /* qoi_drawimg() calls */
+
+#define STAT_T0()          u32 _stat_t0 = time_us_32()
+#define STAT_DRAW_ADD()    do { g_qoi_stat_draw_us += time_us_32() - _stat_t0; \
+				g_qoi_stat_frames++; } while (0)
+#define STAT_FLUSH_T0()    u32 _stat_ft0 = time_us_32()
+#define STAT_FLUSH_ADD(n)  do { \
+		g_qoi_stat_flush_us += time_us_32() - _stat_ft0; \
+		g_qoi_stat_pixels += (n); g_qoi_stat_calls++; } while (0)
+#else
+#define STAT_T0()          do { } while (0)
+#define STAT_DRAW_ADD()    do { } while (0)
+#define STAT_FLUSH_T0()    do { } while (0)
+#define STAT_FLUSH_ADD(n)  do { } while (0)
+#endif
+
 static void qoi_flush(const uint16_t *pixels, size_t count,
 		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
 		      void *user_data)
 {
 	struct qoi_draw_ctx *ctx = (struct qoi_draw_ctx *)user_data;
 
-	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
-			ctx->ox + xe, ctx->oy + ye,
-			(void *)pixels, count * 2);
+	STAT_FLUSH_T0();
+	/*
+	 * Asynchronous flush: this returns while the panel is still receiving the
+	 * batch, so the decoder can start on the other ping-pong buffer. The
+	 * transfer is completed by the next flush (or by the wait at the end of
+	 * qoi_drawimg), which is what keeps the buffer reuse safe.
+	 */
+	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
+			      ctx->ox + xe, ctx->oy + ye,
+			      (void *)pixels, count * 2);
+	STAT_FLUSH_ADD(count);
 }
 
 void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
@@ -226,9 +264,13 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 	if (buf_cap > 480 * QOI_BUF_ROWS)
 		buf_cap = 480 * QOI_BUF_ROWS;
 
+	STAT_T0();
 	rgb565_qoi_decompress_callback(qoi_data, qoi_size, width,
 				       qoi_buf_a, qoi_buf_b,
 				       buf_cap, qoi_flush, &ctx);
+	/* the last batch is still in flight; the frame is not done until it lands */
+	tft_async_video_wait();
+	STAT_DRAW_ADD();
 }
 
 void decoder_set_xy(u16 x, u16 y)
