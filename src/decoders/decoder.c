@@ -294,7 +294,13 @@ void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
  * a dedicated decoder task which does the actual work.
  */
 #define DECODER_FRAME_SLOTS 2
-#define DECODER_FRAME_MAX   65536
+/* One slot has to hold any transfer the control stage accepts, so it is sized
+ * by the same per-board constant as ep1_read_buffer (PUD_MAX_TRANSFER, see
+ * usbd_vendor.h). */
+#define DECODER_FRAME_MAX   PUD_MAX_TRANSFER
+
+_Static_assert(DECODER_FRAME_MAX >= PUD_MAX_TRANSFER,
+	       "a frame slot must be able to hold a whole EP1 transfer");
 
 struct decoder_frame {
 	u16 xs, ys, xe, ye;
@@ -402,7 +408,14 @@ static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
 void decoder_init(void)
 {
 	s_decoder_sem = xSemaphoreCreateBinary();
-	xTaskCreate(decoder_task, "decoder_task", 4096, NULL,
+	/* 1024 words = 4 KB.  Measured peak of the whole decode path (0xa5 fill
+	 * scan, see notes/debugging.md): JPEGDEC 632 B for a full 480x320 image,
+	 * QOI 496 B.  The old 4096 words was sized on the assumption that
+	 * JPEGDEC eats stack, which the measurement does not support: JPEGDEC
+	 * keeps its context in .bss (&g_jpegdec) and its MCU callback only uses
+	 * scalars.  4 KB keeps ~6x margin over the worst case, which matters on
+	 * RP2040 (264 KB SRAM, and no PSPLIM stack guard on Cortex-M0+). */
+	xTaskCreate(decoder_task, "decoder_task", 1024, NULL,
 		    tskIDLE_PRIORITY + 1, NULL);
 	printf("Decoder type: %s\n", decoder_names[DECODER_TYPE]);
 }

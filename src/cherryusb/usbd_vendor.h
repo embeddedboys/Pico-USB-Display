@@ -26,7 +26,32 @@ extern "C" {
 #define REQ_EP3_OUT     0X04
 #define REQ_EP4_IN      0X05
 
-#define EP1_RD_BUF_SIZE 131072
+/* Largest single EP1 transfer the firmware accepts, in bytes.  The same number
+ * sizes ep1_read_buffer (below) and the decoder frame slot (decoder.c); it is
+ * the hard limit the host must respect when splitting a rectangle into bands,
+ * and the device advertises it via PUD_CMD_GET_CAPS so one host build can serve
+ * both boards instead of being rebuilt per board.
+ *
+ * RP2040 has 256 KB of usable SRAM and does not fit the RP2350 values: built
+ * with 128 KB + 2 x 64 KB the .data/.bss came out at 109% of RAM and did not
+ * link.  32 KB per transfer fits with room for the heap; the cost is that a
+ * full-screen refresh needs ~15 bands instead of 8, which is inherent to the
+ * smaller part.
+ */
+#ifndef PUD_MAX_TRANSFER
+#if defined(PICO_RP2040)
+#define PUD_MAX_TRANSFER (32 * 1024)
+#else
+#define PUD_MAX_TRANSFER (64 * 1024) /* one USB_TRANS_MAX_SIZE (65535) transfer */
+#endif
+#endif
+
+/* The staging buffer only has to hold one accepted transfer, so it is the same
+ * number as the protocol limit.  Measured performance-neutral against the old
+ * 128 KB (5.50 ms either way on a full-screen single-transfer frame), and it
+ * saves 64 KB on RP2350 / 96 KB on RP2040. */
+#define EP1_RD_BUF_SIZE PUD_MAX_TRANSFER
+
 #define EP2_WR_BUF_SIZE 128
 #define EP4_WR_BUF_SIZE 128
 
@@ -68,7 +93,9 @@ static const char *string_descriptors[] = {
 extern const struct usb_descriptor xxx_vendor_descriptor;
 
 struct usbd_interface *usbd_vendor_init_intf(uint8_t busid, struct usbd_interface *intf);
-void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
+/* usbd_vendor_ep2_bulk_in_fsm() is declared in usb.h, next to its definition
+ * in usb.c -- it used to be declared here as well, and the two copies drifted
+ * apart when its return type changed. */
 
 #ifdef __cplusplus
 }
