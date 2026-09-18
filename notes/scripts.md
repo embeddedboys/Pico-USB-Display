@@ -76,6 +76,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
 | `touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
+| `touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
 | `lz4_img_viewer.py` | 同上，LZ4 专用名字（需 `DECODER_TYPE=2`）；**分带**由 `pud_usb` 负责 | lz4 |
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
@@ -135,6 +136,32 @@ python3 scripts/touch_test.py --calibrate        # 另给触摸包围盒，判�
 
 `pud_usb.py` 里有 `parse_touch_report()`、`Display.touch_request()`、
 `Display.read_touch()`，新脚本请复用。
+
+## 屏上触摸反馈（`touch_draw.py`）
+
+数字只能告诉你坐标存在，画出来才能告诉你对不对。这个脚本把画布画到面板上，并在**设备
+上报的坐标处**打标记，所以轴序交换、反向、旋转不跟随、贴合偏移一眼就能看出来：
+
+```bash
+python3 scripts/touch_draw.py                 # trace：标记跟着手指走（默认）
+python3 scripts/touch_draw.py --mode grid     # 40 px 网格 + 坐标标签，按下处打点
+python3 scripts/touch_draw.py --mode targets  # 依次点 5 个十字靶，输出每个靶的误差
+```
+
+- `trace`/`grid` 摸就行；`grid` 会在标记旁写上设备报的 `x,y`，直接读数。
+- `targets` 依次标出四角与中心，点完打印 `dx/dy`、平均误差（也就是 `x_offs/y_offs`
+  能抵消的量）和 x/y 跨度（跨度不对说明轴交换或没点全）。
+- 电容屏与玻璃贴合本来就有边缘偏移，**几个像素的平均误差是正常的**。
+
+**实测**（2026-09，`--mode grid --rate 20`，10 分钟）：29 次触摸 / 193 个报告 / 29 个
+release，四角落点 (0,0)、(475,0)、(475,319)、(0,314)，横拖只变 x、竖拖只变 y，
+sequence 全程只跳 2 次，**板子没有挂**。同一批数据在 [usb-protocol.md](usb-protocol.md)
+的 EP4 一节里也记了一份。
+
+**默认限速**：`--rate 20`（每秒最多 20 次面板更新）+ `--gap-ms 2`（每次之间停 2 ms）。
+报告是 33 ms 一个，但链路只有 ~1.1 MB/s，而且这块板子的 USB **在小传输连发时会挂**
+（见 [todo.md](todo.md) 第 8 条）——到得比 `--rate` 快的报告会被合并进下一次更新，
+画布内容不丢，只是传输延后。调试时别把这两个调成 0/关闭。
 
 ## 桌面负载下的编解码器比较（`desktop_codecs.py`）
 
