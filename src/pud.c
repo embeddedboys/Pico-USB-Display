@@ -27,15 +27,26 @@
 
 struct pud_data g_pud_data = {0};
 
+/*
+ * The length is clamped to the field: these are fed from the host's EP2 request
+ * (`struct req_ep2_in.size`), and the old code copied it verbatim into a fixed
+ * field, so an 8 byte query wrote 6 bytes past `cmd` and into `disp` (measured:
+ * every query left g_pud_data.disp as garbage), and a large one would have
+ * walked through RAM.
+ */
 #define define_pud_rw_attr(field, field_type)		\
 void pud_get_rw_##field(field_type *ptr, int len)	\
 {							\
 	struct pud_data *data = &g_pud_data;		\
+	if (len > (int)sizeof(data->field))		\
+		len = (int)sizeof(data->field);		\
 	memcpy((void *)ptr, &data->field, len);		\
 }							\
 void pud_set_rw_##field(field_type *ptr, int len)	\
 {							\
 	struct pud_data *data = &g_pud_data;		\
+	if (len > (int)sizeof(data->field))		\
+		len = (int)sizeof(data->field);		\
 	memcpy(&data->field, (void *)ptr, len);		\
 }
 
@@ -43,6 +54,8 @@ void pud_set_rw_##field(field_type *ptr, int len)	\
 void pud_get_ro_##field(field_type *ptr, int len)	\
 {							\
 	struct pud_data *data = &g_pud_data;		\
+	if (len > (int)sizeof(data->field))		\
+		len = (int)sizeof(data->field);		\
 	memcpy((void *)ptr, &data->field, len);		\
 }
 
@@ -50,11 +63,15 @@ void pud_get_ro_##field(field_type *ptr, int len)	\
 void pud_get_rw_##parent##_##field(field_type *ptr, int len)	\
 {								\
 	struct pud_data *data = &g_pud_data;			\
+	if (len > (int)sizeof(data->parent.field))		\
+		len = (int)sizeof(data->parent.field);		\
 	memcpy((void *)ptr, &data->parent.field, len);		\
 }								\
 void pud_set_rw_##parent##_##field(field_type *ptr, int len)	\
 {								\
 	struct pud_data *data = &g_pud_data;			\
+	if (len > (int)sizeof(data->parent.field))		\
+		len = (int)sizeof(data->parent.field);		\
 	memcpy(&data->parent.field, (void *)ptr, len);		\
 }
 
@@ -62,6 +79,8 @@ void pud_set_rw_##parent##_##field(field_type *ptr, int len)	\
 void pud_get_ro_##parent##_##field(field_type *ptr, int len)	\
 {								\
 	struct pud_data *data = &g_pud_data;			\
+	if (len > (int)sizeof(data->parent.field))		\
+		len = (int)sizeof(data->parent.field);		\
 	memcpy((void *)ptr, &data->parent.field, len);		\
 }
 

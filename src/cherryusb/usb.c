@@ -103,7 +103,8 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
  * the host asked for cannot leak stale buffer contents past its payload. */
 uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 {
-	pud_set_rw_cmd(&cmd, len);
+	/* remember the last command; one byte, not the host's length */
+	pud_set_rw_cmd(&cmd, sizeof(cmd));
 	switch (cmd) {
 	case PUD_CMD_GET_SN:
 		pud_get_ro_sn(ep2_write_buffer, len);
