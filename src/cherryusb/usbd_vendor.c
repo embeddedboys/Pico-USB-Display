@@ -39,14 +39,6 @@ USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 ep1_read_buffer[EP1_RD_BUF_SIZE];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 ep2_write_buffer[EP2_WR_BUF_SIZE];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 ep4_write_buffer[EP4_WR_BUF_SIZE];
 
-struct req_ep1_out {
-	u16 xs;
-	u16 ys;
-	u16 xe;
-	u16 ye;
-	u32 size;
-};
-
 struct req_ep2_in {
 	u16 cmd;
 	u16 size;
@@ -59,39 +51,12 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 	//              "bRequest 0x%02x\r\n",
 	//              __func__,
 	//              setup->bRequest);
-	static struct req_ep1_out *req_ep1_out;
 	static struct req_ep2_in *req_ep2_in;
 
 	switch (setup->bRequest) {
-	case REQ_EP1_OUT:
-		// usb_hexdump(*data, *len);
-		req_ep1_out = (struct req_ep1_out *)*data;
-
-		/* Reject before touching any state: the declared size becomes the
-		 * EP1 read length.  Returning -1 stalls EP0, so an oversized
-		 * request fails fast on the host side instead of overflowing
-		 * ep1_read_buffer or hanging the bulk transfer. */
-		if (!usbd_vendor_ep1_size_ok(req_ep1_out->size))
-			return -1;
-
-		decoder_set_window(req_ep1_out->xs, req_ep1_out->ys,
-				   req_ep1_out->xe, req_ep1_out->ye);
-
-		// USB_LOG_WRN("%s, req_ep1_out, x : 0x%04x, y : 0x%04x, size : %d\n",
-		//                     __func__, decoder_x, decoder_y, transfer_size);
-
-		/* Flow control: only accept the frame once a decoder slot is
-		 * free.  Otherwise leave EP1 un-armed (defer) so the host's
-		 * bulk write blocks instead of the frame being dropped; the
-		 * decoder task re-arms it via usbd_vendor_ep1_tick().
-		 */
-		if (!decoder_slot_free()) {
-			usbd_vendor_ep1_defer(req_ep1_out->size);
-			return 0;
-		}
-
-		return usbd_ep_start_read(busid, EP1_OUT_ADDR, ep1_read_buffer,
-					  req_ep1_out->size);
+	/* REQ_EP1_OUT (0x02) is gone: the rectangle now travels in the EP1 header
+	 * (protocol v2, see notes/usb-protocol.md).  An old host gets a stall here,
+	 * which is what we want -- silently misparsing its frames would be worse. */
 	case REQ_EP2_IN:
 		usb_hexdump(*data, *len);
 		req_ep2_in = (struct req_ep2_in *)*data;

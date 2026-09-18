@@ -24,6 +24,7 @@
 #include "pico/unique_id.h"
 
 #include "pud.h"
+#include "decoder.h"
 
 struct pud_data g_pud_data = {0};
 
@@ -147,8 +148,18 @@ static void pud_config_init(void)
 	data->disp.rotation = TFT_ROTATION;
 	data->disp.intf_type = 0;
 	data->disp.pixelclock_khz = TFT_BUS_CLK_KHZ;
+	/* the panel and the EP1 stream are 16 bpp; the field used to be left at 0,
+	 * which a host can only read as "the device does not know" */
+	data->disp.bpp = 16;
 
-	data->tp.polling_period = INDEV_POLLING_PERIOD_MS;
+	/* Active area, for the host's input resolution (PUD_PANEL_*_MM come from
+	 * the build; 0 means "unknown", and the host then leaves the axis
+	 * resolution alone). */
+	data->disp.width_mm = PUD_PANEL_WIDTH_MM;
+	data->disp.height_mm = PUD_PANEL_HEIGHT_MM;
+
+	/* 0 when this build has no touch driver (PUD_CAPS_TOUCH is clear then) */
+	data->tp.polling_period = INDEV_DRV_NOT_USED ? 0 : INDEV_POLLING_PERIOD_MS;
 }
 
 /*

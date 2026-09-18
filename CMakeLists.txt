@@ -37,6 +37,25 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
 
+# Touch sampling. The library's board config polls the controller every 33 ms
+# (~30 Hz), which is coarse for a pointer: a drag visibly steps, and measured
+# points arrive 32 ms apart. 10 ms (100 Hz) is in step with what the FT6236
+# scans at by itself (PERIODACTIVE defaults to 12 ms); paired with the EP4
+# endpoint's 8 ms bInterval the host collects ~120 reports per second.
+# Overridden here rather than in the shared board config so the other boards
+# using it keep their own value.
+set(INDEV_POLLING_PERIOD_MS 10)
+
+# Panel active area in mm, reported to the host so it can give the input device
+# a resolution in units/mm -- libinput treats an absolute device without one as
+# a kernel bug, and Mutter matches the device size against the outputs when it
+# decides where a touchscreen belongs. 3.5" 480x320 module: 3.5 in = 88.9 mm
+# diagonal at 3:2 -> about 74 x 49 mm of active area. This only scales the
+# reported device size (and calibration), never a coordinate, so a rough value
+# is harmless -- measure the glass if the exact number ever matters.
+set(PUD_PANEL_WIDTH_MM  74)
+set(PUD_PANEL_HEIGHT_MM 49)
+
 # Run the board config's overclock profile 1: RP2350 at 225 MHz with a 75 MHz
 # QSPI clock and the default 1.10V core voltage (the library's recommended,
 # best tested profile -- see the table in
@@ -118,6 +137,9 @@ target_link_libraries(${PROJECT_NAME}
     FreeRTOS-Kernel-Heap3
 )
 
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+    PUD_PANEL_WIDTH_MM=${PUD_PANEL_WIDTH_MM}
+    PUD_PANEL_HEIGHT_MM=${PUD_PANEL_HEIGHT_MM})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})

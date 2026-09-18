@@ -41,9 +41,6 @@
 
 #include "pud.h"
 
-u32 frame_counter = 0;
-// QueueHandle_t xToFlushQueue = NULL;
-
 void vApplicationTickHook()
 {
 }
@@ -105,11 +102,6 @@ int main(void)
 	printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
 
 	pud_init();
-
-	// xToFlushQueue = xQueueCreate(1, sizeof(struct video_frame));
-	// TaskHandle_t video_push_handler;
-	// xTaskCreate(example_video_push_task, "video_push", 256, NULL, (tskIDLE_PRIORITY + 1), &video_push_handler);
-	// vTaskCoreAffinitySet(video_push_handler, (1 << 0));
 
 	TaskHandle_t usb_handler;
 	xTaskCreate(usb_task_handler, "usb_task", 256, NULL,

@@ -27,7 +27,6 @@
 #include "indev.h"
 #include "config.h"
 #include "backlight.h"
-#include "decoder.h"
 
 typedef unsigned char	u8;
 typedef unsigned short	u16;
@@ -37,6 +36,15 @@ typedef signed char	s8;
 typedef signed short	s16;
 typedef signed int	s32;
 
+/* Panel active area in mm, set by the build (see CMakeLists.txt).  0 means
+ * "unknown", which the host reads as "leave the input resolution alone". */
+#ifndef PUD_PANEL_WIDTH_MM
+#define PUD_PANEL_WIDTH_MM	0
+#endif
+#ifndef PUD_PANEL_HEIGHT_MM
+#define PUD_PANEL_HEIGHT_MM	0
+#endif
+
 #define PUD_CMD_GET_SN	0x01
 #define PUD_CMD_GET_CAPS	0x02
 
@@ -44,15 +52,66 @@ typedef signed int	s32;
  * host needs frame_max to size the bands it splits a rectangle into: the same
  * number sizes ep1_read_buffer and the decoder frame slot on the device side
  * (PUD_MAX_TRANSFER, see usbd_vendor.h) and it differs per board (RP2040 has
- * half the SRAM).  Keep this struct in sync with the driver's pud.h. */
+ * half the SRAM).  Keep this struct in sync with the driver's pud.h and with
+ * scripts/pud_usb.py.
+ *
+ * The panel parameters after decoder_type were appended later: a host that
+ * asks for the first 16 bytes (2.0) still gets a valid answer, because the
+ * device clamps its reply to the requested length. */
 #define PUD_CAPS_MAGIC	0x43445550 /* "PUDC" */
-#define PUD_PROTO_VER	1
+#define PUD_PROTO_VER	2
 
 struct pud_caps {
 	u32	magic;
 	u32	proto_ver;
-	u32	frame_max;	/* max bytes the device accepts in one EP1 transfer */
-	u32	decoder_type;	/* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI */
+	u32	frame_max;	/* max bytes per EP1 transfer, header included */
+	u32	decoder_type;	/* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE */
+
+	u16	xres;		/* panel size in the frame it is driven in */
+	u16	yres;
+	u16	pixelclock_khz;	/* bus clock the panel is driven with */
+	u8	rotation;	/* TFT_ROTATION the firmware applied */
+	u8	bpp;
+	u8	intf_type;
+	u8	tp_polling_period; /* touch poll period, ms (0 when there is no touch) */
+	u16	width_mm;	/* active area, for the host's input resolution */
+	u16	height_mm;
+	u16	flags;		/* PUD_CAPS_*: what this build actually has */
+};
+
+/*
+ * Capability flags.  Touch is optional: most board configs in
+ * pico-display-lib set INDEV_DRV_NOT_USED=1 (no controller on the glass), and
+ * the host must not register an input device for those.
+ */
+#define PUD_CAPS_TOUCH	0x0001	/* an indev driver is compiled in and polled */
+
+/*
+ * EP1 OUT framing (protocol v2).
+ *
+ * Every transfer is a header followed by the payload it describes:
+ *
+ *     [ struct pud_ep1_header ][ payload ]
+ *
+ * The rectangle and the length travel with the data instead of arriving first
+ * in a REQ_EP1_OUT control request.  That removes one control transfer per
+ * band: measured 0.14 ms on an idle bus, and on a full-speed link a control
+ * transfer can cost a whole frame once the bulk stream is saturating it.
+ *
+ * The device reads one max-size packet first, which always holds the whole
+ * header (PUD_EP1_HEADER_SIZE <= 64), and then exactly the remaining payload,
+ * so the end of a transfer never depends on a short packet.  A host that
+ * declares more than frame_max - PUD_EP1_HEADER_SIZE gets its endpoint stalled
+ * instead of a truncated frame (g_ep1_stat_oversize).
+ */
+#define PUD_EP1_HEADER_SIZE	12
+
+struct pud_ep1_header {
+	u16	xs;
+	u16	ys;
+	u16	xe;
+	u16	ye;
+	u32	size;		/* payload bytes that follow */
 };
 
 struct disp_data {
@@ -62,6 +121,12 @@ struct disp_data {
 	u32	pixelclock_khz;
 	u8	bpp;
 	u8	intf_type;
+	/* Active area in mm.  The host needs it to give the input device a
+	 * resolution (units/mm): libinput treats an absolute device without one
+	 * as a kernel bug, and Mutter uses the device size when it decides which
+	 * output a touchscreen belongs to. */
+	u16	width_mm;
+	u16	height_mm;
 };
 
 struct tp_data {
@@ -107,23 +172,12 @@ struct pud_touch_report {
 	u8	reserved;
 };
 
-struct jpegdec_data {
-	JPEGIMAGE	img;
-	u8		options;
-};
-
-struct decoder_data {
-
-	u8	type;
-};
-
 struct pud_data {
 	u8	sn[8];
 	u16	cmd;
 
 	struct disp_data	disp;
 	struct tp_data		tp;
-	struct decoder_data	decoder;
 };
 
 extern struct pud_data g_pud_data;
