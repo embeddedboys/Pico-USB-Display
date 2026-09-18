@@ -112,28 +112,34 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 或 gdb 写内存）引起的 —— **未验证**。上桌面重负载前值得再确认一次：跑完读 `HFSR`/`CFSR`，
 非 0 就按 [debugging.md](debugging.md) 的步骤抓 PSP 帧。
 
-## 9. 把 EP4 触摸接到驱动里（固件/用户层已经做完并验证）
+## 9. 量一下 JPEG 路径到底卡在设备还是链路
 
-协议见两个仓的 [notes/usb-protocol.md](usb-protocol.md)。驱动侧要改的点（都是旧版
-"跑一会儿就死"的原因）：
+JPEGDEC 的载荷最小（一张全屏 JPEG 大概 20~40 KB，链路只要 ~30 ms），但解码重，所以它很可能是
+**设备受限**的路径 —— 也就是"热点函数放 SRAM"真正能收益的场景（QOI 那边实测设备侧只快 6~9%、
+端到端看不出来，见 [architecture.md](architecture.md)）。
 
-1. **去掉每个样本一次的 `REQ_EP4_IN` 控制请求**。设备主动推送，主机只需要一开始
-   `usb_submit_urb()` 一次，然后在回调里**无论什么 status 都重新提交**（除非正在卸载）。
-   旧版 `if (urb->status) return;` 一遇到错误就永久不再提交 —— 输入就此失灵。
-2. **`pud_input_cleanup()` 的顺序**：先 `usb_kill_urb()`（并等 work 结束/置位停止标志），
-   再 `usb_free_urb()`、`kfree(ep_int_buf)`；现在 work 可能在 URB 释放后又把它提交回去。
-3. `BTN_TOUCH/BTN_LEFT` 与 `ABS_X/ABS_Y` 用设备报的坐标即可（已是显示坐标系，
-   范围 480×320）；顺手把 `input_set_abs_params` 那两行从 `ABS_MT_*` 改成
-   `ABS_X/ABS_Y`（现在设的是 MT 宏，而上报的是普通 ABS_X/Y）。
-4. 空闲时设备不发帧 → URB 会长时间挂着，这是正常的，别当超时处理。
-5. 丢"松手"的兜底：设备只在状态变化时补一帧，主机可以自己加"多久没收到按下帧就认为
-   松开"的超时（**未实现**）。
+要做的：`DECODER_TYPE=1` + `DECODER_STATS=1` 构建，用 `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`
+发全屏 JPEG（仓库里没有发 JPEG 的脚本，得自己拼），取 `draw_us` 与端到端，再和 XIP / 解码循环
+进 SRAM 两组对比。**未做**。
 
-## 10. 零碎
+## 10. RLE 也换成"非回调 + band 乒乓"（**未做**）
 
-- `main.c` 的 `frame_counter` 是死代码（无任何引用），可删。
+`rgb565_rle_decompress()`（非回调版，缓冲由调用方给）和 QOI 那边一样存在。QOI 换成
+"非回调 + band 乒乓"后设备侧快了 22~48%（见 [decoders.md](decoders.md)），而 RLE 的回调版
+同样是每像素一套"累计 + 容量检查 + 可能回调"的宏，**预期收益相当，但没测**。
+做法照抄 `qoi_drawimg`：`rle_drawimg` 里按 `rect_px <= LZ4_BAND_PIXELS` 分支，用非回调版解到
+一个 band 缓冲，两块乒乓、帧末尾不 wait（下一次 flush 的窗口命令会等前一个传完）。
+
+## 11. 零碎
+
+- TFT 层那把 `#if TFT_BUS_TYPE`（8 处）重构成总线虚表：**有意不做** —— 这个库被 20 来个板子
+  配置共用，我们只能 build 验证自己这块，纯好看、纯风险。现状与理由见
+  [pitfalls.md](pitfalls.md) 的 2.4。
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。
 - `notes/` 里引用 `CMakeLists.txt` 时**别写行号** —— 已经漂过一次（加 tjpgd 链接行之后）。
+- `PUD_MAX_TRANSFER` 别随手动：32 KB 省 109 KB RAM，但小载荷（纯色）会从 4.6 涨到
+  6.5 ms/帧（band 8→15），128 KB 之前量过是持平的；RP2350 保持 64 KB、RP2040 保持 32 KB
+  （实测见 [decoders.md](decoders.md) 的 "USB 传输缓冲不背锅" 一节）。
 - 提交与推送是两件事：默认**只提交、不推送**，推送需要人工放行（见仓库根 `AGENTS.md` 铁律 1）。
   四个仓库都有没推的本地提交（固件仓最多，20+ 个）；要推送时逐个
   `git log --oneline @{u}..` 确认，别照抄笔记里的数字（会漂）。

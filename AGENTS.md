@@ -54,7 +54,8 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    这条是**实测**结论，别再凭"JPEGDEC 吃栈"的猜测往上加 —— 它的上下文在
    `.bss`（`&g_jpegdec`），回调只有标量局部。要加之前先测。
 2. **EP1 流控必须保留。** 帧槽全忙时**故意不武装 EP1**，让主机的 bulk 传输
-   阻塞等待（`usbd_vendor_ep1_defer()` / `usbd_vendor_ep1_tick()`）。
+   阻塞等待（`usbd_vendor_ep1_tick()`：只有槽空时才武装；每帧提交完/解码任务
+   释放槽后都会调用）。
    判定标准：`g_decoder_stat_dropped == 0`，且 `drawn` 落后 `submitted` 恰好 1 帧。
    去掉它 = 槽满静默丢帧 = 局部刷新残影。
 3. **RAM 很紧。** RP2350 512 KB SRAM 里 `ep1_read_buffer`（64 KB）+
@@ -71,12 +72,14 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    且**不要把编号重排** —— `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机。
    两种 JPEG 实现都保留：tjpgd（局刷正确但慢）/ JPEGDEC（快但 `x != 0` 会卡死显示），
    见 [notes/decoders.md](notes/decoders.md)。
-6. **协议字段改动要成对改驱动**（`REQ_*`、`struct req_ep1_out`、`struct req_ep2_in`），
+6. **协议字段改动要成对改驱动**（`REQ_*`、`struct pud_ep1_header`、`struct req_ep2_in`），
    并同步两个仓库的 `notes/usb-protocol.md`。
 7. **异步刷新有缓冲区契约**：`tft_async_video_flush()` 返回时传输仍在进行，
    `vmem` 在 `tft_async_video_wait()`（或下一次 flush，它会先完成上一个）返回前
-   **不得复用**。QOI 的 `qoi_buf_a/b` 乒乓天然满足；改动解码器或换成单缓冲时
-   必须重新确认这一点。同一时刻只允许一个传输在途。
+   **不得复用**。QOI 默认路径靠**两块 band 缓冲乒乓**满足（解码 B 时 A 还在传；
+   下一次 flush 的窗口命令会等 A 传完），回落到回调版时靠 `qoi_buf_a/b` 满足；
+   LZ4 用的是自己那块 `lz4_band` + 每帧 `tft_async_video_wait()`。
+   改动解码器或换成单缓冲时必须重新确认这一点。同一时刻只允许一个传输在途。
 8. **`include/bootlogo.h` 是按 `DECODER_TYPE` 分支的 4500+ 行大数组**：
    用编辑器的精确替换改，**不要用 `sed -i` 之类批处理**
    （曾因参数列表过长把文件清空，靠 `git checkout` 才恢复）。
@@ -104,13 +107,16 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 | `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排 |
 | `OVERCLOCK_ENABLED` | `1` | 板配置 profile 1：RP2350 225 MHz（QSPI 75 MHz，VREG 1.10V）；实测结论见 [`notes/architecture.md`](notes/architecture.md) |
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
-| 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |
+| 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限；**面板参数由 `PUD_CMD_GET_CAPS` 上报**，主机不再写死 |
+| 触摸采样 | 轮询 10 ms + EP4 `bInterval` 8 ms | 两个旋钮要一起改（主机只在 `bInterval` 到点时才来取报告）。实测拖动相邻点 32 ms → **8.0 ms（≈125 Hz）**，整屏吞吐无变化（A/B 四档 ±0.1%）；见 [`notes/usb-protocol.md`](notes/usb-protocol.md) 的 EP4 一节 |
 
 可调构建开关（cache 变量，见 `CMakeLists.txt`）：
 
 | 开关 | 默认 | 作用 |
 | --- | --- | --- |
 | `PUD_DECODER_PINGPONG` | `1` | QOI/RLE 批次乒乓；关掉省 7680 B/解码器，代价是设备侧多花 7~39% 时间（[decoders.md](notes/decoders.md)） |
+| `PUD_CODEC_IN_RAM` | `1` | QOI/RLE 解码循环放 SRAM（编解码库的 `RGB565_*_SECTION` 钩子）；设备侧解码快 2~9%，链路受限时端到端无变化（[architecture.md](notes/architecture.md)） |
+| `QOI_NONCALLBACK` | `2` | QOI 走非回调 API + band 乒乓；设备侧比回调版快 22~48%，代价是 87 KB 缓冲（`0`/`1` 只用于 A/B 和回落，[decoders.md](notes/decoders.md)） |
 | `DECODER_STATS` | `0` | 解码/刷屏耗时计数器（`g_qoi_stat_*`），调试用 |
 
 ## 用户空间工具（`scripts/` 与 `tools/`）
@@ -150,6 +156,15 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   实测 **9.6 ms/次**（`lz4_drawimg()` 也曾每帧 3 行 `printf`，约 10 ms，已随 LZ4 重写删掉）。
 - 大块缓冲不要每帧 `malloc`（LZ4 曾每帧申请 ~307 KB，已改成静态 band 缓冲；
   解码器一律用静态缓冲或调用方缓冲）。
+- `src/decoders/qoi/` 与 `src/decoders/rle/` 是 **vendored 代码，必须与上游仓库
+  （`rgb565-qoi` / `rgb565-rle`）逐字节一致**：要改行为先改上游，再把两个文件整体拷回来
+  （`cmp` 验证）。**编译期差异走它们的钩子**，不要在 vendored 文件里塞本项目的改动 ——
+  已经有的例子是 `RGB565_QOI_SECTION` / `RGB565_RLE_SECTION`（放置钩子，见
+  [architecture.md](notes/architecture.md) 的 SRAM 一节）。
+- **TFT 像素格式只有一个出处**：驱动 init 里的 `0x3A`（COLMOD）。`tft_video_sync()` 和异步
+  路径都原样把缓冲区送出去，**不要再给驱动加"顺手转 RGB666"的 `video_sync`**（ILI9488/9486
+  里那两份 0x55 却转 3 字节的已经删了；ILI9481 保留是因为它 init 就是 `0x66`）。
+  详见 [pitfalls.md](notes/pitfalls.md) 的 2.4。
 
 ## 文档维护
 

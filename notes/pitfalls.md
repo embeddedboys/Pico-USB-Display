@@ -62,7 +62,7 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
   -ex "monitor reset run" -ex "detach" -ex "quit"
 ```
 
-**预防**：主机侧按像素分带（每带 ≤ 21839 像素，最坏 3 字节/像素），
+**预防**：主机侧按像素分带（每带 ≤ 21835 像素，最坏 3 字节/像素 + 12 B EP1 header + 16 B QOI 头尾），
 保证单帧永不超限。见 `PUD-kernel-drivers/notes/display-and-refresh.md`。
 
 ---
@@ -148,6 +148,41 @@ QOI 解码器按像素处理，任意子矩形都正确，没有 MCU 对齐/裁�
 > 一次这样的 flush 就把 `decoder_task` 卡死在 `tft_video_flush` 里，帧槽永不释放、
 > EP1 永不重新武装。**JPEG 只用于整屏（`x = 0`）**；要正确的 JPEG 局刷用 tjpgd，
 > 要快就用 QOI。完整数据见 [decoders.md](decoders.md)。
+
+### 2.4 TFT 层：三套写像素路径，以及"像素格式只有一个出处"（2026-09 清理）
+
+`pico-display-lib` 的 TFT 层原来同时存在三条"把像素送到屏上"的路：
+
+| 路径 | 谁在用 | 怎么写 |
+| --- | --- | --- |
+| `tft_async_video_flush()` → `write_buf_dc_async` 宏 | QOI/RLE/LZ4（默认路径） | 裸缓冲直接起 DMA |
+| `tft_video_flush()` → `tftops->video_sync` | JPEGDEC/tjpgd、`PUD_DECODER_PINGPONG=0` | `set_addr_win` + `write_buf_dc` |
+| 各驱动自己的 `*.video_sync` 覆盖 | 少数驱动 | 驱动自己转格式 |
+
+外加一套 LVGL 时代的脚手架（`xToFlushQueue` + `video_flush_task` + `tft_async_video_push`
++ `tft_video_flush()` 里给自己发 `xTaskNotifyGiveIndexed` + `frame_counter`）——**全是死的**：
+`main.c` 里 `xQueueCreate` 早就注释掉了（那个任务一旦真被创建会因未定义符号直接链接失败），
+通知也没有任何地方 `ulTaskNotifyTake`。2026-09 把这一整套删了，`tft_video_flush()` 现在就是
+一句 `video_sync` 调用；同时 `tft_probe()` 里那两个 `malloc`（64 B 寄存器缓冲 + ops 结构体）
+换成 `tft_priv` 里的静态存储，`tft_clear()` 从"一个像素一次阻塞传输"改成按 480 像素一块。
+
+**留下的规矩（重要）**：
+
+- **像素格式（RGB565 还是 RGB666）只能有一个出处** —— 就是驱动 init 里的 `0x3A`
+  （COLMOD）设置。`tft_video_sync()`/异步路径都**原样**把缓冲区送出去。
+- 因此 `tft_ili9488.c` 和 `tft_ili9486.c` 里那份"RGB565→RGB666 转 3 字节/像素"的
+  `video_sync` 被删掉了 —— 它们自己的 init 都是 `0x3A = 0x55`（RGB565 16-bit），
+  那个转换和异步路径**互相矛盾**（异步路径是 2 字节/像素）。删掉后 SPI/I80 两条路
+  都走通用的 2 B/px 路径，和 `0x55` 一致。
+- **`tft_ili9481.c` 的那份保留**：它的 init 明确写 `0x3A = 0x66`（RGB666），转换是自洽的，
+  而且已经接在 ops 表上。**要加回这类覆盖，必须同时改那块屏的 `0x3A`**，否则就是两套格式。
+- 没有动的（有意）：`tft.c` 里 8 处 `#if TFT_BUS_TYPE` 和 header 里的 `write_buf_dc*` 宏。
+  这个库被 20 来个板子配置共用，我们只能 build 验证自己的配置，把一个"编译期拼接"重构成
+  总线虚表是纯好看、纯风险。
+
+验证：异步路径逐字节对拍（`qoi_band` 双缓冲 A/B 内容与主机期望一致）；同步路径专门编了
+`-DQOI_NONCALLBACK=0 -DPUD_DECODER_PINGPONG=0` 上板跑（`drawn == submitted`、无故障，
+纯色档 6.98 ms/帧仍与早先"乒乓关 1.45×"的 A/B 吻合）；两条路都没有改像素字节。
 
 ---
 
@@ -379,3 +414,56 @@ git -c http.version=HTTP/1.1 submodule update --init --recursive
 
 它是通过 `target_compile_definitions` 传进去的，只改 `.cmake` 不重新配置不会生效。
 另外 `include/bootlogo.h` 的 logo 数据也随类型切换 —— 换了类型别忘了确认开机 logo 正常。
+
+### 4.7 CherryUSB 子模块停在 v1.5.2，要不要升到 v1.6.1（2026-09 复核：不用）
+
+我们只编译 `core/usbd_core.c` + `port/rp2040/usb_dc_rp2040.c` + 自己的 `usb.c`/`usbd_vendor.c`
+（`src/cherryusb/CMakeLists.txt` 里显式列的）。**v1.5.2 → v1.6.1 一共动了 171 个文件，
+但落在我们编译/包含范围内的只有 7 个**：
+
+| 文件 | 变化 | 影响 |
+| --- | --- | --- |
+| `port/rp2040/usb_dc_rp2040.c` | **没变**（逐字节相同） | 无（USB 控制器行为不变） |
+| `core/usbd_core.c` | 删掉非 ADVANCE_DESC 的旧路径；EP0 包长改为读设备描述符的 `bMaxPacketSize0`；`usbd_initialize/deinitialize` 清理（总线断言、EP0 mq 释放、新增 `USBD_EVENT_DEINIT`） | 我们描述符里 EP0 就是 64（宏里硬编码 `0x40`），行为一致 |
+| `core/usbd_core.h` | `usbd_desc_register()` 成为唯一描述符 API（**ADVANCE_DESC 变强制**）；`usbd_initialize` 的 handler 加 typedef；多 include 两个新头 | 我们**已经**定义 `CONFIG_USBDEV_ADVANCE_DESC` ✓ |
+| `common/usb_def.h` | BOS/WebUSB/WinUSB platform capability 结构体改名；注释缩进；描述符宏未动 | 我们不用这些描述符 |
+| `common/usb_util.h` | `WBVAL/DBVAL` 加括号；新增 `DIV_ROUND_CLOSEST` | 更安全，无影响 |
+| `common/usb_osal.h` | 多一个 `usb_osal_sem_create_counting` 原型 | 我们不用 OSAL |
+| `common/usb_version.h` / `usb_otg.h` | 版本号；OTG mode 宏 | 无关 |
+
+- 新增 `common/usb_ringbuffer.h`、`common/usb_mempool.h` 是**纯头文件**，而且 **device core 里一次都没用到**
+  （`grep` = 0），`CONFIG_USB_MEMPOOL_MAX_BLOCK_COUNT` 头里自带默认值 16 → **配置不用加东西**。
+- **端点路径一个字没动**：`usbd_ep_start_write/read`、`usbd_ep_close`、stall、`ep_cb`、`ep0_state`
+  在 diff 里都是零行 → 我们的 EP1/EP2/EP4 与 vendor 请求处理不受影响（那边也没有当年 HardFault 的修）。
+- 其余 160+ 个文件是 class/（我们不用 class，vendor class 是自己写的）、host（`usbh_*`/`usbotg_core`）、
+  demo、以及 DWC2/MUSB/EHCI 的改动 —— **都不在我们编译范围内**。1.5.3/1.6.0 的更新点（serial 框架、
+  HID report 解析、UVC bulk、DWC2 时钟等）也都在 host 侧。
+
+**结论**：升级是低风险的小事，但目前**没有任何功能收益**，先不动；等上游真的加了我们要的东西
+（比如 device 侧双缓冲、或某个 core 修复）再升。真要升，记得"改完必须上板跑一遍"
+（171 个文件里含 `usbd_core.c` 的初始化/断言路径）。
+
+## 五、USB 端点
+
+### 5.1 EP1 OUT 为什么不做双缓冲（2026-09，结论：做了也没用）
+
+RP2040/RP2350 的 USB 控制器**支持**端点双缓冲（`EP_CTRL_DOUBLE_BUFFERED_BITS` +
+`EP_CTRL_INTERRUPT_PER_DOUBLE_BUFFER` + `USB_BUF_CTRL_SEL`；RP2350 上同样的位在
+`usb_device_dpram.h` 里叫 `USB_DEVICE_DPRAM_EPn_IN_CONTROL_DOUBLE_BUFFERED` /
+`..._INTERRUPT_PER_DOUBLE_BUFF`），但我们的 bulk OUT **用不上、也不需要**：
+
+- **CherryUSB 的设备端没实现**：`port/rp2040/usb_dc_rp2040.c` 给每个端点方向只分一个
+  64 B DPRAM 缓冲（`next_buffer_ptr += 64`），PID 自己翻。**我们锁的 v1.5.2 和上游
+  `master`（v1.6.1）这个文件逐字节相同**（`diff` 无输出），所以升级子模块也不会带来它；
+  只有 **host** 端 `usb_hc_rp2040.c` 实现了双缓冲。
+- **参考实现也故意避开 device OUT**：pico-sdk 里的 TinyUSB `dcd_rp2040.c` 有完整双缓冲代码，
+  却对 device OUT 强制单缓冲，注释是 *"skip double buffered for OUT endpoint in Device mode,
+  since host could send < 64 bytes and cause short packet on buffer0"*。社区有补丁
+  （notro 的 gist）把 bulk 双向都打开，但没进上游。我们的传输**每次都短包结尾**，正好在那个坑上。
+- **实测它本来就不是瓶颈**：同一个 55583 B 载荷、40 帧，真 QOI **1.130 MB/s**，
+  等长的垃圾数据（设备完全不解码、每包 USB 工作量相同）**1.131 MB/s** —— 一样。
+  也就是说设备从来不是丢包的原因；离全速理论上限（19×64 B/ms = 1.216 MB/s）差的那 7%
+  在**总线/主机侧**（每帧能排下的 packet 数、URB 结构），双缓冲救不了。
+  这也和"每帧 11 KB ~ 444 KB 速率都是 1.11~1.13 MB/s 一条平线"吻合。
+
+**结论**：继续单缓冲；链路已经是这条路的天花板，要更快只能**少发字节**（更好的压缩、更小的脏区）。

@@ -195,7 +195,7 @@ GNOME/Wayland 的坑）、两套真实内容（整屏缩放到 480×320 / 4K 里
   整帧 block 解不了。
 - `open_device()` 会顺带发一次 `PUD_CMD_GET_CAPS`，把设备的上限落到 `disp.frame_max` 与
   `disp.band_pixels`，`send_rgb565()` 按它分带；设备不认这条命令（老固件）时保留本机默认
-  值（65535 B / 21839 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
+  值（65535 B / 21835 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
 - 固件的 EP2 查询路径打了 UART 日志（`usb_hexdump` + `USB_LOG_WRN`），
   实测每次查询约 **9.6 ms** —— 需要频繁查询时先去掉这些打印。
 - LZ4 已经重写：静态 band 缓冲、无 `printf`、每个传输一个 band（见

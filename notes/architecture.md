@@ -66,8 +66,17 @@ set(PIO_USE_DMA 1)
 | 200×200 纯色（2 band） | **1065 µs** | 122 µs（26 次 flush） | 40000 |
 | 480×320 纯色（8 band） | **3968 µs** | 332 µs（43 次 flush） | 153600 |
 
-整条设备侧路径（QOI 解码 + 窗口命令 + 刷屏）只要 **0.026 µs/像素**（≈38 M px/s），
-**刷屏不是瓶颈**：
+刷屏本身不慢，但**解码要看内容**（全屏 480×320、每档 20 帧的平均，`DECODER_STATS`）：
+
+| 内容 | 设备侧 `draw_us`/帧 | 折合 µs/像素 | 主要花在哪 |
+| --- | --- | --- | --- |
+| 纯色 | 4.14 ms | 0.027 | 刷屏（其中 PIO 转移就有 3.07 ms） |
+| 渐变 | 24.1 ms | 0.157 | 解码 |
+| 照片 | 44.5 ms | 0.290 | 解码 |
+| 噪声 | 45.6 ms | 0.297 | 解码 |
+
+所以"0.026 µs/像素"只对**低熵内容**成立（那时确实由 PIO 转移主导）；真实的照片/噪声内容是
+**解码主导**，0.29~0.30 µs/像素（≈65 周期/像素 @225 MHz）。**刷屏那条路径仍然不是瓶颈**：
 
 - i80 PIO 程序只有两条指令（`out pins,16 side 0` + `nop side 1`）＝**每个 16 位写占 2 个
   PIO 周期**；`clkdiv = PERI/2/TFT_BUS_CLK` = 2.25（板上 `PIO0 SM0_CLKDIV` 读到 `0x00024000`
@@ -77,8 +86,33 @@ set(PIO_USE_DMA 1)
 - 所以 200×200 那档"没变"不是刷屏受限，而是 **`tightloop.py` 量的是宿主机**：同一个
   480×45（21600 像素）band，宿主机花 **2.72 ms 在 Python QOI 编码器**上、0.14 ms 在 EP0
   窗口、0.48 ms 在 bulk 写，而设备只要 0.56 ms。**别拿 `tightloop.py` 的 rect/s 当设备性能。**
-- 真实负载的瓶颈是**全速 USB 链路（约 1 MB/s）**：全屏桌面内容 94 KB 要传 89 ms，而设备侧
-  只要约 4 ms。想更快只能减少字节数（更好的压缩、更小的脏区），不是加主频、也不是改 PIO。
+- 真实负载的瓶颈是**全速 USB 链路（约 1 MB/s）**：全屏桌面内容 93893 B 要传 89 ms，而设备侧
+  同一帧按内容要 4~45 ms（上表）—— 链路仍然是主因，但设备侧已经不是零头了。
+  想更快首先得减少字节数（更好的压缩、更小的脏区），不是加主频、也不是改 PIO。
+
+### 热点函数放 SRAM（`__time_critical_func`，2026-09 实测）
+
+QOI/RLE 的解码循环放进 SRAM 后（QOI 段 2.3 KB、RLE 段 1.8 KB），设备侧解码快 2~9%
+（全屏 480×320、每档 20 帧的平均）：
+
+| 内容 | QOI 全在 flash | QOI 解码在 SRAM | RLE 全在 flash | RLE 解码在 SRAM |
+| --- | --- | --- | --- | --- |
+| 纯色 | 4.14 ms | **3.85 ms** | 3.64 ms | **3.55 ms** |
+| 渐变 | 24.1 ms | **22.2 ms** | 9.39 ms | **8.67 ms** |
+| 照片 | 44.5 ms | **40.6 ms** | 16.7 ms | **15.3 ms** |
+| 噪声 | 45.6 ms | **42.9 ms** | 3.91 ms | **3.76 ms** |
+
+- **只标记热点函数就够了**：QOI 那 2.3 KB 的收益和整份固件搬进 SRAM
+  （`pico_set_binary_type(... copy_to_ram)`，+83 KB RAM）几乎一样，所以不需要 copy_to_ram。
+- **端到端基本看不出来**（桌面负载是链路受限：QOI 照片 120.7→118.8 ms、RLE 照片 197.7→198.0 ms），
+  只有**载荷很小、设备受限**的用例有收益（QOI 纯色 4.97→4.57 ms/帧，-8%）。值不值得留取决于
+  以后是否换到**设备受限**的场景（JPEG 解码、或者链路变快以后）。
+- **实现**（默认开，`cmake .. -DPUD_CODEC_IN_RAM=0` 关掉）：两个编解码库各有一个放置钩子，
+  上游 `rgb565-qoi` / `rgb565-rle` 的 `RGB565_QOI_SECTION` / `RGB565_RLE_SECTION`（默认空，
+  保持 freestanding C99 可移植），本项目在 `src/decoders/{qoi,rle}/CMakeLists.txt` 里传
+  `-DRGB565_*_SECTION=__attribute__((section(".time_critical.*")))`。这样 **vendored 文件仍与上游
+  逐字节一致**（`cmp` 可验证），不必为了放 RAM 去改 vendored 代码。
+  副作用：调用方在 flash、被调方在 SRAM，会各多一条 linker veneer —— 每帧一次，可忽略。
 
 稳定性：225 MHz 下 6000 × 32×32 + 2000 × 200×200 连发 `errors=0`、`drawn == submitted`、
 `CFSR`/`HFSR` 保持 0、宿主机无异常（两个故障寄存器是粘滞的，见
@@ -200,7 +234,7 @@ USB 初始化并行，和改前一致。改后单次传输 5.00 ms、`dropped=0`
 
 | 固件 | 驱动 |
 | --- | --- |
-| `src/cherryusb/usbd_vendor.c` 的 `struct req_ep1_out` | `usb.c` 的 `struct req_ep1_out` |
+| `include/pud.h` 的 `struct pud_ep1_header` | `pud.h` 的 `struct pud_ep1_header` |
 | `struct req_ep2_in` | `pud_transfer()` 里的 4 字节请求头 |
 | `DECODER_FRAME_MAX` / `EP1_RD_BUF_SIZE` | `USB_TRANS_MAX_SIZE` |
 | `qoi_drawimg()` | `qoi_encode_rgb565()` |
