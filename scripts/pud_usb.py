@@ -61,6 +61,8 @@ EP4_IN_ADDR = EP_DIR_IN | 0x04
 
 REQ_EP0_OUT = 0x00
 REQ_EP0_IN = 0x01
+#: Gone since protocol v2: the rectangle travels in the EP1 header.  Kept here
+#: so the number stays documented (the device stalls it, on purpose).
 REQ_EP1_OUT = 0x02
 REQ_EP2_IN = 0x03
 REQ_EP4_IN = 0x05
@@ -69,10 +71,29 @@ CMD_GET_SN = 0x01
 CMD_GET_CAPS = 0x02
 
 #: Device capability report (``PUD_CMD_GET_CAPS``): magic, protocol version,
-#: the largest single EP1 transfer the device accepts, and its active decoder.
-#: Kept in sync with ``struct pud_caps`` in the firmware and the driver.
+#: the largest single EP1 transfer the device accepts, its active decoder and
+#: (appended later) the panel parameters.  Kept in sync with ``struct
+#: pud_caps`` in the firmware and the driver; the first 16 bytes are the older
+#: layout, which a firmware from before the panel block still answers with.
 CAPS_MAGIC = 0x43445550  # "PUDC"
-CAPS_STRUCT = struct.Struct("<IIII")
+
+#: Capability flag: the device has a touch controller and polls it.  Most board
+#: configs in pico-display-lib have no touch (``INDEV_DRV_NOT_USED=1``), so a
+#: host must not assume touch just because EP4 exists.
+CAPS_TOUCH = 0x0001
+
+CAPS_V1 = struct.Struct("<IIII")
+CAPS_V1_SIZE = CAPS_V1.size
+CAPS_STRUCT = struct.Struct("<IIIIHHHBBBBHHH")
+
+#: Protocol version this host speaks.  v2 moved the rectangle and the payload
+#: length out of the REQ_EP1_OUT control request and into a header in front of
+#: every EP1 payload -- one control transfer less per band (measured 0.14 ms).
+PUD_PROTO_VER = 2
+
+#: EP1 transfer framing: this header, then the payload it describes.
+EP1_HEADER = struct.Struct("<HHHHI")
+EP1_HEADER_SIZE = EP1_HEADER.size
 
 #: Largest payload the firmware accepts in one transfer (its frame slot is
 #: 64 KiB, and the protocol carries the length in a 16-bit field).
@@ -82,9 +103,10 @@ USB_TRANS_MAX_SIZE = 65535
 
 #: A transfer is decoded as one self-contained QOI image, so a rectangle is
 #: split into horizontal bands that survive QOI's worst case of 3 bytes per
-#: pixel plus the 8-byte header and 8-byte end marker. Same rule the driver
-#: uses (PUD_MAX_BAND_PIXELS), which costs nothing in sustained throughput.
-PUD_MAX_BAND_PIXELS = (USB_TRANS_MAX_SIZE - 16) // 3
+#: pixel plus the 8-byte header and 8-byte end marker, inside a transfer that
+#: also carries EP1_HEADER_SIZE bytes of framing.  Same rule the driver uses
+#: (PUD_MAX_BAND_PIXELS), which costs nothing in sustained throughput.
+PUD_MAX_BAND_PIXELS = (USB_TRANS_MAX_SIZE - EP1_HEADER_SIZE - 16) // 3
 
 DEFAULT_TIMEOUT_MS = 5000
 
@@ -538,10 +560,14 @@ def open_device():
         raise PudError("cannot claim the interface: %s" % exc)
 
     disp = Display(dev)
-    # Not fatal: an older firmware simply keeps the host-side defaults.
     try:
         disp.query_caps()
+    except PudError:
+        # A protocol mismatch is not something to paper over: the transfer
+        # framing differs, so say so instead of failing on a mystery timeout.
+        raise
     except Exception:
+        # No capability report (an older firmware): keep the host defaults.
         pass
     return disp
 
@@ -584,10 +610,16 @@ class Display:
         self.close()
 
     # -- protocol ---------------------------------------------------------
-    def _window(self, xs, ys, xe, ye, size):
-        self.dev.ctrl_transfer(
-            TYPE_VENDOR | EP_DIR_OUT, REQ_EP1_OUT, 0, 0,
-            struct.pack("<HHHHI", xs, ys, xe, ye, size))
+    def _payload_limit(self):
+        """Largest payload one transfer can carry, i.e. what is left of the
+        device's (and the host's) transfer ceiling after the EP1 header."""
+        return min(USB_TRANS_MAX_SIZE, self.frame_max) - EP1_HEADER_SIZE
+
+    def _send_rect(self, xs, ys, xe, ye, payload, timeout):
+        """One EP1 transfer: the header, then the payload it describes."""
+        self.dev.write(EP1_OUT_ADDR,
+                       EP1_HEADER.pack(xs, ys, xe, ye, len(payload)) + payload,
+                       timeout=timeout)
 
     def _check_rect(self, xs, ys, xe, ye):
         if xs < 0 or ys < 0 or xe >= self.width or ye >= self.height:
@@ -602,15 +634,14 @@ class Display:
         not QOI, and by anything that wants full control over the stream.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        limit = min(USB_TRANS_MAX_SIZE, self.frame_max)
+        limit = self._payload_limit()
         if len(payload) > limit:
             raise PudError(
                 "%d byte payload exceeds the %d byte limit this device accepts"
                 % (len(payload), limit))
         self._check_rect(xs, ys, xe, ye)
-        self._window(xs, ys, xe, ye, len(payload))
         t0 = time.perf_counter()
-        self.dev.write(EP1_OUT_ADDR, payload, timeout=timeout)
+        self._send_rect(xs, ys, xe, ye, payload, timeout)
         return len(payload), time.perf_counter() - t0
 
     def send_rgb565(self, rgb565, width, height, xs=0, ys=0, timeout=None,
@@ -637,7 +668,7 @@ class Display:
         timeout = timeout or DEFAULT_TIMEOUT_MS
         self._check_rect(xs, ys, xs + width - 1, ys + height - 1)
         rows = max(1, self.band_pixels // width)
-        limit = min(USB_TRANS_MAX_SIZE, self.frame_max)
+        limit = self._payload_limit()
         total = 0
         bands = 0
         t0 = time.perf_counter()
@@ -650,9 +681,8 @@ class Display:
             if len(payload) > limit:
                 raise PudError("band of %d bytes exceeds the %d byte limit"
                                % (len(payload), limit))
-            self._window(xs, ys + y, xs + width - 1, ys + y + bh - 1,
-                         len(payload))
-            self.dev.write(EP1_OUT_ADDR, payload, timeout=timeout)
+            self._send_rect(xs, ys + y, xs + width - 1, ys + y + bh - 1,
+                            payload, timeout)
             total += len(payload)
             bands += 1
 
@@ -692,10 +722,12 @@ class Display:
     def query_caps(self, timeout=None):
         """Ask the device what it accepts (``PUD_CMD_GET_CAPS``).
 
-        Updates ``frame_max``, ``band_pixels`` and ``decoder_type``.  A device
-        without the command answers with whatever was left in its buffer, so
-        the magic (not the transfer length) is what decides; on any mismatch the
-        conservative defaults are kept and None is returned.
+        Updates ``frame_max``, ``band_pixels``, ``decoder_type`` and, when the
+        firmware reports them, the panel parameters.  A device without the
+        command answers with whatever was left in its buffer, so the magic (not
+        the transfer length) is what decides; on any mismatch the conservative
+        defaults are kept and None is returned.  A firmware predating the panel
+        parameters answers with the first 16 bytes and is accepted.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
         self.dev.ctrl_transfer(
@@ -703,17 +735,35 @@ class Display:
             struct.pack("<HH", CMD_GET_CAPS, CAPS_STRUCT.size))
         raw = bytes(self.dev.read(EP2_IN_ADDR, CAPS_STRUCT.size,
                                   timeout=timeout))
-        if len(raw) < CAPS_STRUCT.size:
+        if len(raw) < CAPS_V1_SIZE:
             return None
-        magic, proto_ver, frame_max, decoder_type = CAPS_STRUCT.unpack(raw)
+        magic, proto_ver, frame_max, decoder_type = CAPS_V1.unpack(
+            raw[:CAPS_V1_SIZE])
         if magic != CAPS_MAGIC or not (0 < frame_max <= (1 << 20)):
             return None
+        if proto_ver != PUD_PROTO_VER:
+            raise PudError(
+                "device speaks protocol v%d, this host speaks v%d -- the "
+                "rectangle now travels in the EP1 header, so update whichever "
+                "side is older" % (proto_ver, PUD_PROTO_VER))
 
         self.caps = dict(proto_ver=proto_ver, frame_max=frame_max,
                          decoder_type=decoder_type)
+        if len(raw) >= CAPS_STRUCT.size:
+            (_magic, _proto, _frame_max, _decoder, xres, yres, pixelclock_khz,
+             rotation, bpp, intf_type, tp_polling_period,
+             width_mm, height_mm, flags) = CAPS_STRUCT.unpack(raw)
+            self.caps.update(xres=xres, yres=yres, bpp=bpp or 16,
+                             rotation=rotation,
+                             pixelclock_khz=pixelclock_khz,
+                             intf_type=intf_type,
+                             touch_polling_period=tp_polling_period,
+                             width_mm=width_mm, height_mm=height_mm,
+                             touch=bool(flags & CAPS_TOUCH))
         self.frame_max = min(USB_TRANS_MAX_SIZE, frame_max)
-        if self.frame_max > 16:
-            self.band_pixels = max(1, (self.frame_max - 16) // 3)
+        if self.frame_max > EP1_HEADER_SIZE + 16:
+            self.band_pixels = max(
+                1, (self.frame_max - EP1_HEADER_SIZE - 16) // 3)
         self.decoder_type = decoder_type
         return self.caps
 

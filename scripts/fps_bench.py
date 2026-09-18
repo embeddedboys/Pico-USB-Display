@@ -13,7 +13,7 @@ What is measured
 ----------------
 Timing covers the whole submit path for one frame:
 
-    EP0 control transfer (REQ_EP1_OUT window)  ->  EP1 bulk transfer
+    EP1 bulk transfer (header + payload, protocol v2)
 
 Frame *encoding* is done up front and deliberately excluded from the timing
 loop, so the numbers describe the link and the device rather than python.
