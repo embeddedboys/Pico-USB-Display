@@ -37,8 +37,11 @@ include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
 # include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
 
-# Disable overclocking for stability (RP2350 at default 150 MHz instead of 225 MHz)
-set(OVERCLOCK_ENABLED 0)
+# Run the board config's overclock profile 1: RP2350 at 225 MHz with a 75 MHz
+# QSPI clock and the default 1.10V core voltage (the library's recommended,
+# best tested profile -- see the table in
+# lib/pico-display-lib/configs/pico_dm_qd3503728.cmake).
+set(OVERCLOCK_ENABLED 1)
 
 # Use the PIO DMA path for the I8080 TFT writes. It was disabled because the
 # DMA DREQ interaction with the PIO appeared to stall under load; re-enabled to

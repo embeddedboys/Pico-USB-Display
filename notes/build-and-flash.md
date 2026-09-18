@@ -103,12 +103,14 @@ Start address 0x1000014c, load size 220576
 
 ### `CMakeLists.txt`
 
-| 行 | 配置 | 当前值 | 说明 |
-| --- | --- | --- | --- |
-| 34 | 显示配置 include | `pico_dm_qd3503728.cmake` | 决定屏型号/分辨率/引脚 |
-| 41 | `OVERCLOCK_ENABLED` | `0` | 关超频（稳定性） |
-| 45 | `PIO_USE_DMA` | `0` | I8080 走 PIO 轮询，避开 DMA 卡死 |
-| 69 | `DECODER_TYPE` | `3` | 3 = QOI |
+| 配置 | 当前值 | 说明 |
+| --- | --- | --- |
+| 显示配置 include | `pico_dm_qd3503728.cmake` | 决定屏型号/分辨率/引脚 |
+| `OVERCLOCK_ENABLED` | `1` | 板配置 profile 1：RP2350 225 MHz / QSPI 75 MHz / 1.10V，见 [architecture.md](architecture.md) |
+| `PIO_USE_DMA` | `1` | I8080 走 PIO + DMA（早期 DREQ 卡死已复测通过） |
+| `DECODER_TYPE` | `3` | 3 = QOI |
+
+（不写 `CMakeLists.txt` 的行号了 —— 加一行就漂，已经漂过一次。）
 
 ### 显示配置（`lib/pico-display-lib/configs/*.cmake`）
 

@@ -103,6 +103,8 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 跑完再读设备：`CFSR = 0`、`HFSR = 0`（这两个故障寄存器是**粘滞**的，复位后一直为 0，
 就说明这几组负载没触发任何故障）、`drawn == submitted = 16650`（无丢帧）、宿主机 `uptime`
 没归零。所以"连发打挂"不成立，限速不是必要的规避手段。
+（表里的 rect/s 是**宿主机**受限的数字，别当设备性能看 —— 见
+[architecture.md](architecture.md) 的 225 MHz 一节。）
 
 **剩下一个真问题**：这次排查开始时 Pico 确实停在 HardFault 里（`CFSR = 0x8200`）。
 现场寄存器与解读见 [debugging.md](debugging.md) 的"HardFault 定位"。它**无调试器复现不出来**

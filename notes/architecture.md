@@ -29,21 +29,61 @@
 | 关键引脚 | CS 18 / WR 19 / RS 20 / RESET 22 / BLK 28，数据总线 DB0..DB15 |
 | 调试串口 | UART，115200，TX 16 / RX 17 |
 
-### `CMakeLists.txt` 里的两处**故意覆盖**
+### `CMakeLists.txt` 里的两处**覆盖**
 
-配置 include **之后**（第 41、45 行）又强制关掉了两个功能：
+配置 include **之后**（第 41、45 行左右）按本项目的需要覆盖了两项：
 
 ```cmake
-# Disable overclocking for stability (RP2350 at default 150 MHz instead of 225 MHz)
-set(OVERCLOCK_ENABLED 0)
+# 跑板子配置里的 overclock profile 1：RP2350 225 MHz / QSPI 75 MHz / 默认 1.10V
+set(OVERCLOCK_ENABLED 1)
 
-# Use the PIO polling path for the I8080 TFT writes instead of DMA
-set(PIO_USE_DMA 0)
+# 用 PIO + DMA 路径写 I8080 TFT
+set(PIO_USE_DMA 1)
 ```
 
-- `OVERCLOCK_ENABLED 0` → 按 comments 说明，跑 150 MHz 而非 225 MHz（稳定性优先）。
-- `PIO_USE_DMA 0` → 走 PIO 轮询路径。**这是踩坑后的结论**：PIO + DMA 的 DREQ 交互
-  在负载下会卡死（详见 [pitfalls.md](pitfalls.md)）。想改回去务必先做压力测试。
+- `OVERCLOCK_ENABLED 1` → 走板子配置那张表里的 profile 1（RP2350 **225 MHz**、QSPI
+  **75 MHz**、VREG 用默认 1.10V，见 `lib/pico-display-lib/configs/pico_dm_qd3503728.cmake`）。
+  `SYS_CLK_KHZ` / `PERI_CLK_KHZ` 由 `drivers/clk/config.cmake` 按 profile 给出，主频由 `main.c`
+  的 `set_sys_clock_khz()` 设置。**注意 QSPI 分频只编译进 boot stage 2**
+  （`PICO_FLASH_SPI_CLKDIV`，见 `drivers/clk/CMakeLists.txt`），它在 `main()` 抬主频**之前**
+  就生效、之后一直不变，所以换主频必须同时确认这个分频值。
+- `PIO_USE_DMA 1` → 走 PIO + DMA 路径。**这是踩坑后的结论**：早期 PIO 与 DMA 的 DREQ
+  交互在负载下卡死，重测通过后才改回 1，详见 [pitfalls.md](pitfalls.md)。
+
+### 主频 225 MHz（2026-09 实测）
+
+| 用例 | 150 MHz | 225 MHz |
+| --- | --- | --- |
+| 6000 × 32×32 小矩形连发（gap 0） | 2417 rect/s | **2585 rect/s**（+7%） |
+| 2000 × 200×200 纯色矩形（载荷很小） | 158 rect/s | 159 rect/s（**没变**） |
+| 桌面负载全屏（`desktop_codecs --frames 150`，QOI） | 94.00 ms | **89.10 ms**（-5%） |
+| 同上 wallpaper strip | 23.79 ms | **20.79 ms**（-13%） |
+
+**为什么只快这么一点**（`DECODER_STATS=1` 实测拆解）：
+
+| 用例 | 设备侧 `draw_us` | 其中 `flush_us` | 像素 |
+| --- | --- | --- | --- |
+| 200×200 纯色（2 band） | **1065 µs** | 122 µs（26 次 flush） | 40000 |
+| 480×320 纯色（8 band） | **3968 µs** | 332 µs（43 次 flush） | 153600 |
+
+整条设备侧路径（QOI 解码 + 窗口命令 + 刷屏）只要 **0.026 µs/像素**（≈38 M px/s），
+**刷屏不是瓶颈**：
+
+- i80 PIO 程序只有两条指令（`out pins,16 side 0` + `nop side 1`）＝**每个 16 位写占 2 个
+  PIO 周期**；`clkdiv = PERI/2/TFT_BUS_CLK` = 2.25（板上 `PIO0 SM0_CLKDIV` 读到 `0x00024000`
+  ＝ 2.25），PIO 时钟 100 MHz → **50 M 次写/s（0.02 µs/像素、100 MB/s）**。150 MHz 时
+  clkdiv 1.5、225 MHz 时 2.25，两边都是 100 MHz —— **面板速率本来就是设计成不随主频变的**。
+  实测 0.024 µs/像素（`draw_us − flush_us`）已是理论值的 ~85%。
+- 所以 200×200 那档"没变"不是刷屏受限，而是 **`tightloop.py` 量的是宿主机**：同一个
+  480×45（21600 像素）band，宿主机花 **2.72 ms 在 Python QOI 编码器**上、0.14 ms 在 EP0
+  窗口、0.48 ms 在 bulk 写，而设备只要 0.56 ms。**别拿 `tightloop.py` 的 rect/s 当设备性能。**
+- 真实负载的瓶颈是**全速 USB 链路（约 1 MB/s）**：全屏桌面内容 94 KB 要传 89 ms，而设备侧
+  只要约 4 ms。想更快只能减少字节数（更好的压缩、更小的脏区），不是加主频、也不是改 PIO。
+
+稳定性：225 MHz 下 6000 × 32×32 + 2000 × 200×200 连发 `errors=0`、`drawn == submitted`、
+`CFSR`/`HFSR` 保持 0、宿主机无异常（两个故障寄存器是粘滞的，见
+[debugging.md](debugging.md)）。板上核对过：`PLL_SYS` FBDIV=75、REFDIV=1、postdiv 4/1
+→ 225 MHz，`QMI_M0_TIMING` 的 CLKDIV=3 → QSPI 75 MHz。
 
 ## 启动流程
 
