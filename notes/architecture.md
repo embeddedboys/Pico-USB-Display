@@ -73,7 +73,7 @@ main()                                        main.c
 
 | 任务 | 声明栈 | 实测峰值 | 剩余 |
 | --- | --- | --- | --- |
-| `decoder_task` | 1024 w（4 KB） | 496 B（QOI）/ 632 B（JPEGDEC 整帧） | 3600 B |
+| `decoder_task` | 1024 w（4 KB） | 496 B（QOI）/ 632 B（JPEGDEC）/ 600 B（tjpgd） | 3600 B |
 | `indev_read` | 256 w（1 KB） | 432 B（含 `printf`） | 592 B |
 | `usb_task` | 256 w（1 KB） | 416 B（CherryUSB 初始化） | 608 B |
 | `Tmr Svc` | 256 w（1 KB） | 152 B | 872 B |
@@ -141,7 +141,7 @@ USB 初始化并行，和改前一致。改后单次传输 5.00 ms、`dropped=0`
 | `main.c` | 时钟/串口初始化、任务创建 |
 | `src/pud.c` | 设备抽象层：初始化序列、命令读写宏（`pud_get_ro_*` / `pud_set_rw_*`） |
 | `src/cherryusb/` | USB 设备栈接入：描述符、厂商请求处理、端点回调 |
-| `src/decoders/` | 解码器抽象与各实现（JPEGDEC / LZ4 / QOI；0 号槽位保留） |
+| `src/decoders/` | 解码器抽象与各实现（tjpgd / JPEGDEC / LZ4 / QOI） |
 | `include/pud.h` / `include/decoder.h` | 对外接口与类型 |
 | `include/bootlogo.h` | 按 `DECODER_TYPE` 分支的开机 logo 压缩数据 |
 | `lib/` | 子模块：Pico SDK 之外的依赖 |

@@ -98,6 +98,7 @@ target_link_libraries(${PROJECT_NAME}
     pico-display-lib
     cherryusb_device
     jpegdec
+    tjpgd
     lz4
     qoi
     FreeRTOS-Kernel-Heap3

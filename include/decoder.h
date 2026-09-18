@@ -26,11 +26,9 @@
 
 #include "JPEGDEC.h"
 
-/* DECODER_TYPE values.  The numbering is part of the USB protocol -- the device
- * reports it to the host through PUD_CMD_GET_CAPS -- so slot 0 stays reserved
- * rather than shifting the others.  tjpgd was planned for that slot but was
- * never implemented: JPEGDEC is the only JPEG decoder here. */
-#define DECODER_TYPE_RESERVED 0
+/* DECODER_TYPE values.  The numbering is part of the USB protocol (the device
+ * reports it to the host through PUD_CMD_GET_CAPS), so do not renumber. */
+#define DECODER_USE_TJPGD   0
 #define DECODER_USE_JPEGDEC   1
 #define DECODER_USE_LZ4       2
 #define DECODER_USE_QOI       3
@@ -46,6 +44,7 @@ typedef unsigned int u32;
 extern uint16_t decoder_xs, decoder_ys;
 extern uint16_t decoder_xe, decoder_ye;
 
+extern void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
 extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
 extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size);
 extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size);
@@ -56,8 +55,8 @@ extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye,
 				 const u8 *data, u32 size);
 extern bool decoder_slot_free(void);
 
-#if DECODER_TYPE == DECODER_TYPE_RESERVED
-	#error "DECODER_TYPE 0 is reserved (tjpgd was never implemented): use 1 (JPEGDEC), 2 (LZ4) or 3 (QOI)"
+#if DECODER_TYPE == DECODER_USE_TJPGD
+	#define decoder_drawimg(xs, ys, xe, ye, b, l) tjpgd_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_JPEGDEC
 	#define decoder_drawimg(xs, ys, xe, ye, b, l) jpegdec_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_LZ4

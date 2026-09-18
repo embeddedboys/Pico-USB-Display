@@ -147,7 +147,8 @@ r2 = <TFT 数据指针>
 - `configRECORD_STACK_HIGH_ADDRESS 0` → TCB 里**没有** `pxEndOfStack`，栈深得自己从创建点带进去。
 - 实测峰值（当前声明值）：`decoder_task` 496 B / 4 KB —— **空转和满载全屏解码一模一样**，
   整条 QOI 路径（含开机 logo 那一帧）峰值 ≤ 496 B；切到 `DECODER_TYPE=1` 实测
-  **JPEGDEC 整帧 480×320 是 632 B**（这就是 4096 words 缩到 1024 的依据）；
+  **JPEGDEC 整帧 480×320 是 632 B**、`DECODER_TYPE=0`（tjpgd）是 **600 B**
+  （这两条就是 4096 words 缩到 1024 的依据）；
   `usb_task` 416 B / 1 KB、`indev_read` 432 B / 1 KB、`Tmr Svc` 152 B / 1 KB、
   idle 112~128 B / 1 KB。
 - 要量某个 `DECODER_TYPE` 的路径，把 `CMakeLists.txt` 里的 `DECODER_TYPE` 改过去重烧即可 ——

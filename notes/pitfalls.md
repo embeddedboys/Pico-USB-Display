@@ -143,6 +143,12 @@ pDraw->iWidthUsed   /* 正确：本次实际解码的宽度 */
 用错会让每行像素偏移错位。这是最终放弃 JPEGDEC 转向 QOI 的原因之一 ——
 QOI 解码器按像素处理，任意子矩形都正确，没有 MCU 对齐/裁切问题。
 
+> **实测比“错位”更严重**：给 `x != 0` 的矩形发 JPEG 时 `iWidthUsed` 会变成负值，
+> `xe` 被算成子图内坐标（实测 `xs=208 → xe=63`）、`len` 变成巨大的无符号数，
+> 一次这样的 flush 就把 `decoder_task` 卡死在 `tft_video_flush` 里，帧槽永不释放、
+> EP1 永不重新武装。**JPEG 只用于整屏（`x = 0`）**；要正确的 JPEG 局刷用 tjpgd，
+> 要快就用 QOI。完整数据见 [decoders.md](decoders.md)。
+
 ---
 
 ## 三、内存
@@ -335,11 +341,11 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 ### 4.2 `decoder_names[]` 必须包含所有类型
 
 ```c
-static char *decoder_names[] = { "(unused)", "JPEGDEC", "LZ4", "QOI" };
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
 ```
 
 这个数组曾漏掉 `"QOI"`，而 `DECODER_TYPE=3` 会越界读。加解码器时同步这里；
-0 号槽位（tjpgd 从未实现）**不要删**，否则后面几个编号全体前移。
+**编号不要重排**（`decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机）。
 
 ### 4.3 `include/bootlogo.h` 是个超大的条件编译文件
 

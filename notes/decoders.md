@@ -2,18 +2,14 @@
 
 ## 解码器抽象
 
-编译期通过 `DECODER_TYPE` 选择（`CMakeLists.txt` 第 69 行，默认 **3 = QOI**）：
+编译期通过 `DECODER_TYPE` 选择（`CMakeLists.txt` 里的 `set(DECODER_TYPE ...)`，默认 **3 = QOI**）：
 
 | 值 | 名称 | 输入格式 | 状态 |
 | --- | --- | --- | --- |
-| 0 | — | — | **保留槽位**：tjpgd 从未实现（`decoder.h` 里 `#error`）。编号不能改，它要上报给主机 |
-| 1 | JPEGDEC | JPEG | 可用，但局部刷新有已知缺陷（见下） |
+| 0 | tjpgd | JPEG | 可用（ChaN TJpgDec，见下）；局刷正确但慢 |
+| 1 | JPEGDEC | JPEG | 可用且更快，但**局部刷新会把显示路径写死**（见下） |
 | 2 | LZ4 | LZ4 | 可用 |
-| 3 | **QOI** | RGB565 QOI | **当前使用** |
-
-> **JPEG 只有 JPEGDEC 一种实现**（`src/decoders/jpegdec/`，没有再引入第二份）。
-> 0 号槽位的 tjpgd 计划过但从未落地，源码里连一份都没有；槽位保留是因为
-> `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机，改编号等于改协议。
+| 3 | **QOI** | RGB565 QOI | **当前使用**（全屏比两种 JPEG 快 12~20 倍） |
 
 `include/decoder.h` 用一个宏做分发：
 
@@ -21,11 +17,41 @@
 #define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
 ```
 
-调试日志里的名字来自 `decoder_names[] = { "(unused)", "JPEGDEC", "LZ4", "QOI" }`，
+调试日志里的名字来自 `decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" }`，
 开机打印 `Decoder type: QOI`。
 
 > **坑**：这个数组曾漏掉 `"QOI"` 这一项，而 `DECODER_TYPE=3` 会越界读。
-> 加解码器时别忘了同步这个数组。
+> 加解码器时别忘了同步这个数组；**编号不要重排**（`decoder_type` 会上报给主机）。
+
+### 两种 JPEG 实现（2026-02 实测）
+
+| | tjpgd（0） | JPEGDEC（1） |
+| --- | --- | --- |
+| 来源 | ChaN TJpgDec R0.03 + Bodmer 的 `swap`，vendored 在 `src/decoders/tjpgd/` | `src/decoders/jpegdec/` |
+| 480×320 4:4:4 全屏（`assets/bootlogo.jpg`） | 114.6 ms | **76.4 ms** |
+| 480×320 4:2:0 全屏（Pillow 重存） | 175.3 ms | **66.1 ms** |
+| 局部刷新（`x != 0`，64×64 @ x=208） | ✓ 正确 | ✗ **坐标错并卡死显示** |
+| 额外 RAM（净） | +2 KB | 0 |
+| 解码栈峰值 | 600 B | 632 B |
+
+两者的语义都是**主机把子图裁好、JPEG 自带尺寸、固件按 `(xs,ys)` 贴图**，`xe/ye` 不参与。
+
+**为什么两种都留着**：JPEGDEC 在 `x != 0` 时 `iWidthUsed` 会算出负值，`draw_mcus` 于是把
+`xe = x + iWidth - 1` 填成**子图内坐标**（实测 `xs=208 → xe=63`），`len` 变成巨大的无符号数；
+一次这样的 flush 就足以让 `decoder_task` 卡在 `tft_video_flush` 里，帧槽永不释放、EP1 永不
+重新武装（实测 `submitted/drawn = 2/0`、`s_ep1_pending_size` 一直挂着），主机只能超时。
+**规范：JPEG 两条路都只用于整屏；局刷一律走 QOI。**
+
+tjpgd 侧踩过的坑：
+
+- 上游按 **8×8 块**回调，逐块 flush 会把地址窗口设 **2400 次/帧**；改成攒满 8 行再 flush
+  （`TJPGD_GROUP_ROWS`，缓冲 480×8×2 = 7.5 KB）后每帧 40 次 —— 但实测只快 3~7%
+  （118.5 → 111~115 ms），说明瓶颈在解码核心，不在刷屏粒度。
+- **MCU 高度随色度采样变化**（4:4:4 → 8 行，4:2:0 → 16 行），一次回调可能跨 8 行组的边界，
+  所以拷贝必须**按行遍历、跨组即 flush**；按“一块一次”写会按 16 行写进 8 行缓冲 ——
+  480 宽的 4:2:0 图会写穿 7.5 KB。`assets/bootlogo.jpg` 恰好是 4:4:4，只用它测发现不了。
+- 净 RAM 只有 +2 KB：9.4 KB workspace（`JD_FASTDECODE 2`）+ 7.5 KB 行缓冲，替换掉了同一
+  构建里 QOI 的 15 KB 乒乓缓冲（`qoi_buf_a/b`，靠 `--gc-sections` 丢弃）。
 
 **各解码器的 `drawimg(xs, ys, xe, ye, data, size)` 签名一致**，坐标为整屏绝对坐标，
 `xe`/`ye` 为闭区间。
@@ -175,7 +201,7 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 | | JPEG (JPEGDEC) | QOI |
 | --- | --- | --- |
 | 有损 | 是 | **否** |
-| 子图解码正确性 | MCU/crop 逻辑在 `x != 0` 时错位裁切，局部刷新不准，负载下会卡死显示 | **按像素处理，任意子矩形都正确** |
+| 子图解码正确性 | MCU/crop 逻辑在 `x != 0` 时错位裁切，且会卡死显示（见上） | **按像素处理，任意子矩形都正确** |
 | 编码速度（主机） | 慢 | **极快** |
 | 压缩率 | 好 | 差（照片类约 1 B/px，最坏 3 B/px） |
 
@@ -192,6 +218,10 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 ```
 
 `iWidth` 是整图宽度，`iWidthUsed` 才是本次实际解码的宽度。用错会导致每行像素偏移错位。
+
+**实测比“错位”更严重**：给 `x != 0` 的矩形发 JPEG 时 `iWidthUsed` 会变成负值，`xe` 被算成
+子图内坐标、`len` 变成巨大的无符号数，一次这样的 flush 就把 `decoder_task` 卡死在
+`tft_video_flush` 里（详见上文“两种 JPEG 实现”的实测）。所以 **JPEG 只用于整屏（`x = 0`）**。
 
 ## 性能：解码器批量填充 + 异步刷新
 

@@ -1,0 +1,19 @@
+/*----------------------------------------------------------------------------/
+/ TJpgDec - Tiny JPEG Decompressor R0.03                      (C)ChaN, 2021
+/-----------------------------------------------------------------------------/
+/ The TJpgDec is a generic JPEG decompressor module for tiny embedded systems.
+/ This is a free software that opened for education, research and commercial
+/  developments under license policy of following terms.
+/
+/  Copyright (C) 2021, ChaN, all right reserved.
+/
+/ * The TJpgDec module is a free software and there is NO WARRANTY.
+/ * No restriction on use. You can use, modify and redistribute it for
+/   personal, non-profit or commercial products UNDER YOUR RESPONSIBILITY.
+/ * Redistributions of source code must retain the above copyright notice.
+/----------------------------------------------------------------------------*/
+
+Vendored unmodified from the UDD reference project's src/tjpgd (which carries
+Bodmer's JDEC.swap addition on top of ChaN's R0.03).  The files here are
+byte-identical to that copy; only tjpgdcnf.h's configuration is meaningful to
+this project.

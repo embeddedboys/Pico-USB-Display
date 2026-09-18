@@ -56,12 +56,14 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `Display.send_rgb565(px, w, h, x, y)` | 发一个矩形，必要时按驱动规则分带 |
 | `Display.send_raw(payload, ...)` | 发已压缩的数据（非 QOI 编码器或测试用） |
 | `Display.get_sn()` | 读 8 字节板子唯一 ID |
+| `Display.query_caps()` | 问设备能力（`PUD_CMD_GET_CAPS`）：`frame_max` / `decoder_type` |
 | `load_image(path, w, h, fit)` | 解码图片为 RGB888（Pillow→cv2 依次尝试） |
 | `video_frames(path, w, h, fps, fit)` | ffmpeg 管道逐帧产出 RGB888 |
 | `ffmpeg_frames(cmd, w, h)` | 通用 ffmpeg 取帧（录屏脚本复用它） |
 | `qoi_encode(px)` / `rgb888_to_rgb565()` / `crop_rgb565()` | 编码与像素工具 |
 
-`send_*` 会校验矩形是否越出面板（超界直接报错，而不是发出一个被硬件裁掉的窗口）。
+`send_*` 会校验矩形是否越出面板（超界直接报错，而不是发出一个被硬件裁掉的窗口），
+也会按**设备上报**的 `frame_max` 校验载荷大小（`open_device()` 时问一次，见下）。
 
 ## 脚本一览
 
@@ -116,8 +118,14 @@ python3 scripts/xorg_desktop_share.py --fps 15 --stats
 
 ## 固件侧配合的注意事项
 
-- 默认 `DECODER_TYPE=3`（QOI）。图片/视频脚本都按 QOI 发；用 LZ4 脚本前必须先把
-  固件改成 `DECODER_TYPE=2`，否则数据会被 QOI 解码器丢弃（不会崩，但屏幕不动）。
+- 默认 `DECODER_TYPE=3`（QOI）。图片/视频脚本都按 QOI 发；换成 `2`（LZ4）才能用
+  `lz4_img_viewer.py`，换成 `0`/`1`（tjpgd / JPEGDEC）才能收 JPEG —— 发错格式不会崩，
+  但屏幕上不动。**JPEG 只能整屏发（`x = y = 0`）**：JPEGDEC 在 `x != 0` 时会卡死显示，
+  见 [decoders.md](decoders.md)。仓库里没有发 JPEG 的脚本，测试直接用
+  `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。
+- `open_device()` 会顺带发一次 `PUD_CMD_GET_CAPS`，把设备的上限落到 `disp.frame_max` 与
+  `disp.band_pixels`，`send_rgb565()` 按它分带；设备不认这条命令（老固件）时保留本机默认
+  值（65535 B / 21839 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
 - 固件的 EP2 查询路径打了 UART 日志（`usb_hexdump` + `USB_LOG_WRN`），
   实测每次查询约 **9.6 ms** —— 需要频繁查询时先去掉这些打印。
 - `lz4_drawimg()` 每帧 `malloc`/`free` 约 307 KB 工作区、每帧 3 行 `printf`

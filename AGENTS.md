@@ -49,7 +49,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 1. **解码只能在 `decoder_task` 里做。** 在 `usbd_vendor_ep1_bulk_out()`
    （USB 中断上下文）里解码会因中断栈不足 HardFault（`CFSR` 的 `STKERR`），
    并且会长时间阻塞 USB 中断。`decoder_task` 栈 **1024 words（4 KB）**：
-   整条解码路径的实测峰值是 JPEGDEC 632 B / QOI 496 B（用 `0xa5` 填充反推，
+   整条解码路径的实测峰值是 JPEGDEC 632 B / tjpgd 600 B / QOI 496 B（用 `0xa5` 填充反推，
    见 [notes/debugging.md](notes/debugging.md)），4 KB 已有约 6 倍余量。
    这条是**实测**结论，别再凭"JPEGDEC 吃栈"的猜测往上加 —— 它的上下文在
    `.bss`（`&g_jpegdec`），回调只有标量局部。要加之前先测。
@@ -67,7 +67,10 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    （RP2040 上实测 128 KB + 2×64 KB 时 .data/.bss 达到 RAM 的 109%，直接链接失败）。
 4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
    它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
-5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读）。
+5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读），
+   且**不要把编号重排** —— `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机。
+   两种 JPEG 实现都保留：tjpgd（局刷正确但慢）/ JPEGDEC（快但 `x != 0` 会卡死显示），
+   见 [notes/decoders.md](notes/decoders.md)。
 6. **协议字段改动要成对改驱动**（`REQ_*`、`struct req_ep1_out`、`struct req_ep2_in`），
    并同步两个仓库的 `notes/usb-protocol.md`。
 7. **异步刷新有缓冲区契约**：`tft_async_video_flush()` 返回时传输仍在进行，
@@ -82,7 +85,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
-| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；用 LZ4 脚本前必须先改成 `2` |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排 |
 | `OVERCLOCK_ENABLED` | `0` | 150 MHz，稳定性优先 |
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |

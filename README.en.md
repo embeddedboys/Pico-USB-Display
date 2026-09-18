@@ -166,6 +166,17 @@ Design notes and pitfall write-ups for maintainers live in [`notes/`](./notes/):
 - [Userspace tools](./notes/scripts.md)
 - [Pitfalls](./notes/pitfalls.md)
 
+## Open source software used
+
+- [FreeRTOS-Kernel](https://github.com/FreeRTOS/FreeRTOS-Kernel)
+- [bitbank2/JPEGENC](https://github.com/bitbank2/JPEGENC)
+- [bitbank2/JPEGDEC](https://github.com/bitbank2/JPEGDEC)
+- [dgatf/usb_library_rp2040](https://github.com/dgatf/usb_library_rp2040)
+- [cherry-embedded/CherryUSB](https://github.com/cherry-embedded/CherryUSB)
+- [Bodmer/TJpg_Decoder](https://github.com/Bodmer/TJpg_Decoder)
+- [ChaN/TJpgDec](http://elm-chan.org/fsw/tjpgd/00index.html)
+- [embeddedboys/pico_dm_qd3503728_freertos](https://github.com/embeddedboys/pico_dm_qd3503728_freertos)
+
 ## Links
 
 - [PUD-kernel-drivers - A drm driver for Pico USB Display](https://github.com/embeddedboys/PUD-kernel-drivers)
