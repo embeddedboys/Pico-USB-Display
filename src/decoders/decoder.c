@@ -243,6 +243,23 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 }
 
 /*
+ * Batch ping-pong for the callback decoders (QOI, RLE).
+ *
+ * Their libraries hand us one batch at a time and let us choose between two
+ * accumulation buffers: with a second buffer the next batch can be decoded
+ * while the previous one is still being written to the panel (the flush is
+ * asynchronous), with one buffer every batch has to land before the next one
+ * starts.  Build with -DPUD_DECODER_PINGPONG=0 to measure what the overlap is
+ * worth on a given workload -- it also drops one 7680 byte buffer per decoder.
+ *
+ * Correctness does not depend on the choice: single buffer mode uses the
+ * synchronous flush, so the decoder never touches a buffer that is in flight.
+ */
+#ifndef PUD_DECODER_PINGPONG
+#define PUD_DECODER_PINGPONG 1
+#endif
+
+/*
  * Optional decode/display timing counters, shared by every decoder path
  * (see DECODER_STATS in the top level CMakeLists.txt).  Off by default; read
  * them with gdb, e.g.
@@ -354,7 +371,9 @@ void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 
 /* 480 x QOI_BUF_ROWS pixels per accumulation buffer, two ping-pong buffers */
 static uint16_t qoi_buf_a[480 * QOI_BUF_ROWS];
+#if PUD_DECODER_PINGPONG
 static uint16_t qoi_buf_b[480 * QOI_BUF_ROWS];
+#endif
 
 struct qoi_draw_ctx {
 	uint16_t ox;
@@ -374,9 +393,16 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 	 * transfer is completed by the next flush (or by the wait at the end of
 	 * qoi_drawimg), which is what keeps the buffer reuse safe.
 	 */
+#if PUD_DECODER_PINGPONG
 	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
 			      ctx->ox + xe, ctx->oy + ye,
 			      (void *)pixels, count * 2);
+#else
+	/* one buffer: it has to be free before the decoder fills it again */
+	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
+			ctx->ox + xe, ctx->oy + ye,
+			(void *)pixels, count * 2);
+#endif
 	STAT_FLUSH_ADD(count);
 }
 
@@ -400,7 +426,12 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 
 	STAT_T0();
 	rgb565_qoi_decompress_callback(qoi_data, qoi_size, width,
-				       qoi_buf_a, qoi_buf_b,
+				       qoi_buf_a,
+#if PUD_DECODER_PINGPONG
+				       qoi_buf_b,
+#else
+				       NULL,
+#endif
 				       buf_cap, qoi_flush, &ctx);
 	/* the last batch is still in flight; the frame is not done until it lands */
 	tft_async_video_wait();
@@ -421,7 +452,9 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 
 /* 480 x RLE_BUF_ROWS pixels per accumulation buffer, two ping-pong buffers */
 static uint16_t rle_buf_a[480 * RLE_BUF_ROWS];
+#if PUD_DECODER_PINGPONG
 static uint16_t rle_buf_b[480 * RLE_BUF_ROWS];
+#endif
 
 struct rle_draw_ctx {
 	uint16_t ox;
@@ -437,9 +470,16 @@ static void rle_flush(const uint16_t *pixels, size_t count,
 	STAT_FLUSH_T0();
 	/* asynchronous, same contract as the QOI flush: the buffer may only be
 	 * reused once the next flush (or the wait below) has completed it. */
+#if PUD_DECODER_PINGPONG
 	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
 			      ctx->ox + xe, ctx->oy + ye,
 			      (void *)pixels, count * 2);
+#else
+	/* one buffer: it has to be free before the decoder fills it again */
+	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
+			ctx->ox + xe, ctx->oy + ye,
+			(void *)pixels, count * 2);
+#endif
 	STAT_FLUSH_ADD(count);
 }
 
@@ -462,7 +502,12 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
 
 	STAT_T0();
 	rgb565_rle_decompress_callback(rle_data, rle_size, width,
-				       rle_buf_a, rle_buf_b,
+				       rle_buf_a,
+#if PUD_DECODER_PINGPONG
+				       rle_buf_b,
+#else
+				       NULL,
+#endif
 				       buf_cap, rle_flush, &ctx);
 	/* the last batch is still in flight; the frame is not done until it lands */
 	tft_async_video_wait();

@@ -78,6 +78,13 @@ set(DECODER_TYPE 3)
 #   cmake .. -DDECODER_STATS=1
 set(DECODER_STATS 0 CACHE STRING "collect g_qoi_stat_* decode/display timings")
 
+# Batch ping-pong for the QOI/RLE callback decoders: with a second accumulation
+# buffer the next batch is decoded while the previous one is still going to the
+# panel.  Off trades that overlap for 7680 bytes less RAM per decoder, which is
+# how its value was measured (see notes/decoders.md):
+#   cmake .. -DPUD_DECODER_PINGPONG=0
+set(PUD_DECODER_PINGPONG 1 CACHE STRING "overlap QOI/RLE batch decode with the panel write")
+
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -110,6 +117,7 @@ target_link_libraries(${PROJECT_NAME}
 
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
+target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})
 
 pico_enable_stdio_usb(${PROJECT_NAME} 0)
 pico_enable_stdio_uart(${PROJECT_NAME} 1)

@@ -77,6 +77,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
 | `lz4_img_viewer.py` | 同上，LZ4 专用名字（需 `DECODER_TYPE=2`）；**分带**由 `pud_usb` 负责 | lz4 |
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
+| `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
 | `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
 
 典型用法：
@@ -117,6 +118,27 @@ python3 scripts/xorg_desktop_share.py --fps 15 --stats
 
 结论：**局刷由 USB 带宽决定**（`fps ≈ 1.05e6 / 每帧字节数`）；**全刷由面板写入决定**
 （153600 像素固定约 36 ms ≈ 4.3 Mpx/s），只有单帧压缩后超过约 40 KB 才转为 USB 受限。
+
+## 桌面负载下的编解码器比较（`desktop_codecs.py`）
+
+这个项目面向桌面，主负载是**局部刷新**，整屏照片测试不代表它，所以单独有一份负载：
+
+```bash
+python3 scripts/desktop_codecs.py                                          # 合成桌面，只算载荷
+python3 scripts/desktop_codecs.py --image shot.png                         # 用真实桌面截图
+python3 scripts/desktop_codecs.py --image shot.png --device --codec lz4     # 再上板测时间
+```
+
+按“桌面会脏的矩形”逐个比较（默认合成一帧 480×320 桌面；给了 `--image` 就用真实截图）。
+`--device` 会把每个 band **先编码好**再计时（复用 `fps_bench.measure()`），并把编码耗时
+单独打成一列 —— 手写 Python 的 QOI/RLE 编码器整帧要几十毫秒，混进计时就会得出错误结论
+（见 [decoders.md](decoders.md) 的“测量纠正”）。
+**内容越真实越好**：合成桌面偏平坦，会高估 LZ4 的压缩率。真实截图怎么取（板上
+GNOME/Wayland 的坑）、两套真实内容（整屏缩放到 480×320 / 4K 里 1:1 裁 480×320）的完整
+实测与结论见 [decoders.md](decoders.md)。
+
+> **小矩形连发会把板子的 USB 打挂**（未定因，见 [todo.md](todo.md)）：脚本默认
+> `--gap-ms 3`，别调成 0 跑长循环。
 
 ## 固件侧配合的注意事项
 

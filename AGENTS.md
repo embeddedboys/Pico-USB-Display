@@ -99,6 +99,13 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |
 
+可调构建开关（cache 变量，见 `CMakeLists.txt`）：
+
+| 开关 | 默认 | 作用 |
+| --- | --- | --- |
+| `PUD_DECODER_PINGPONG` | `1` | QOI/RLE 批次乒乓；关掉省 7680 B/解码器，代价是设备侧多花 7~39% 时间（[decoders.md](notes/decoders.md)） |
+| `DECODER_STATS` | `0` | 解码/刷屏耗时计数器（`g_qoi_stat_*`），调试用 |
+
 ## 用户空间工具（`scripts/` 与 `tools/`）
 
 - **不加载内核驱动就能验证全部功能**（pyusb 直连），比反复 insmod/rmmod 快得多。
@@ -115,6 +122,13 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `scripts/check_pudcodec.py` 对拍。
   `--codec lz4` 输出的是 **band 容器**（每 band 一个 block，`--band` 默认取能整除高度的
   最大行数），因为整帧 block 设备解不了（见"架构不变量"第 9 条）。
+- 本项目面向**桌面**（配合 DRM 驱动），主负载是**局部刷新**：评估编解码器用
+  `scripts/desktop_codecs.py`（按"桌面会脏的矩形"比较），整屏照片/噪声测试**不代表**它。
+  真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**（载荷少 15~35%，三者都跑在
+  1.0~1.1 MB/s 的链路极限上）；LZ4 的优势在内核侧（不用 vendor 编码器），不是性能
+  （见 [notes/decoders.md](notes/decoders.md)）。**给设备计时必须把编码放在循环外**，
+  否则量的是 Python 编码器而不是解码器。小矩形连发会把板子 USB 打挂，脚本默认留 3 ms
+  间隔，见 [notes/todo.md](notes/todo.md)。
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被
   `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。

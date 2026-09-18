@@ -78,7 +78,28 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 驱动现在的 `rgb565_qoi.c` 就是"多余源文件"的例子，接完 LZ4 可以删掉。
 用户层怎么测的：`scripts/img_viewer.py --codec lz4`、`scripts/codec_compare.py --codec lz4`。
 
-## 8. 零碎
+## 8. 小矩形连发会把 RK3588 的 USB 打挂（未定因，桌面场景要查）
+
+`scripts/desktop_codecs.py --device` 第一次跑用的是 `--frames 150`、**无间隔**连发 6 个
+矩形（每次 EP0 窗口 + EP1 bulk，载荷 0.5~31 KB），跑到中途**整块板子失联**：ssh 与 ping
+都没响应约 1~2 分钟，随后自己重启（`uptime` 归零）。
+
+**Pico 侧没事**：失联期间用 SWD 连上去看，它在正常跑（PC 在固件里），所以是**主机侧**的
+问题。旧启动的内核日志没能留下（journald 没持久化内核日志），**因此没定因** —— 是 dwc3
+控制器、libusb 还是 Pico 的某种应答触发，**未验证**。
+
+加 3 ms 间隔后，同样负载跑完三轮（QOI / LZ4 / RLE 各烧一次）都正常，所以脚本默认
+`--gap-ms 3`。
+
+**第二次复现**（`PUD_DECODER_PINGPONG` 的紧循环 A/B，`codec_compare.py --frames 60`
+无间隔）：跑到 QOI 那一档时板子再次失联并自行重启，另外两档因此没测到数据 ——
+所以它与编解码器无关，就是"无间隔 + 小载荷 + 多次传输"这个组合。
+
+**这条对桌面很关键**：桌面的负载恰恰就是**大量小矩形**。如果真的连发就能打挂主机，
+那么"一次刷新一个 URB"的设计要在驱动侧确认（合并脏区、限速、或查 dwc3）。复现方式：
+`--frames 150 --gap-ms 0`，但**会把板子打挂**，要有人能断电重启再做。
+
+## 9. 零碎
 
 - `main.c` 的 `frame_counter` 是死代码（无任何引用），可删。
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。
