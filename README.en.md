@@ -174,6 +174,8 @@ Design notes and pitfall write-ups for maintainers live in [`notes/`](./notes/):
 - [dgatf/usb_library_rp2040](https://github.com/dgatf/usb_library_rp2040)
 - [cherry-embedded/CherryUSB](https://github.com/cherry-embedded/CherryUSB)
 - [Bodmer/TJpg_Decoder](https://github.com/Bodmer/TJpg_Decoder)
+- [rgb565-qoi](https://github.com/embeddedboys/rgb565-qoi)
+- [rgb565-rle](https://github.com/embeddedboys/rgb565-rle)
 - [ChaN/TJpgDec](http://elm-chan.org/fsw/tjpgd/00index.html)
 - [embeddedboys/pico_dm_qd3503728_freertos](https://github.com/embeddedboys/pico_dm_qd3503728_freertos)
 

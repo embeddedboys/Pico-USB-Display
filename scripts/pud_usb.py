@@ -112,6 +112,66 @@ def _qoi_hash(px):
             & 0x3F)
 
 
+#: Run-length limits of the RGB565 RLE format (src/decoders/rle/).
+RLE_MAX_RUN = 128
+
+
+def rle_max_compressed_size(pixel_count):
+    """Worst case for `pixel_count` pixels: 4 byte header + 3 bytes each."""
+    return 0 if pixel_count <= 0 else 4 + 3 * pixel_count
+
+
+def rle_encode(pixels):
+    """Compress RGB565 pixels (bytes or an iterable of ints) into an RLE stream.
+
+    Byte-identical to the C library's rgb565_rle_compress(): a 4 byte
+    little-endian pixel count, then runs.  A control byte with bit 7 set is a
+    repeat run (one pixel, repeated `(ctl & 0x7f) + 1` times); otherwise it is a
+    literal run of that many distinct pixels.  Every pixel is two bytes,
+    little-endian.
+    """
+    if isinstance(pixels, (bytes, bytearray, memoryview)):
+        view = memoryview(pixels)
+        if view.itemsize != 2 or len(pixels) % 2:
+            view = memoryview(bytes(pixels)).cast("H")
+        else:
+            view = view.cast("H")
+    else:
+        view = pixels
+
+    n = len(view)
+    out = bytearray()
+    out += struct.pack("<I", n)
+
+    pos = 0
+    while pos < n:
+        limit = min(RLE_MAX_RUN, n - pos)
+        first = view[pos]
+        run = 1
+        while run < limit and view[pos + run] == first:
+            run += 1
+
+        if run >= 2:
+            out.append(0x80 | (run - 1))
+            out += struct.pack("<H", first)
+            pos += run
+            continue
+
+        # literal run: stop where a beneficial repeat run would start, i.e.
+        # where the next two pixels are equal (same rule as the C encoder)
+        lit = 1
+        while lit < limit:
+            nxt = pos + lit
+            if nxt + 1 < n and view[nxt] == view[nxt + 1]:
+                break
+            lit += 1
+        out.append(lit - 1)
+        out += struct.pack("<%dH" % lit, *view[pos:pos + lit])
+        pos += lit
+
+    return bytes(out)
+
+
 def qoi_encode(pixels):
     """Compress RGB565 pixels (bytes or an iterable of ints) into a QOI stream.
 
@@ -568,6 +628,8 @@ class Display:
 
 _REFERENCE_PIXELS = (0x1234, 0x1235, 0x1236, 0x1236, 0x1236, 0xF800, 0x07E0,
                      0x1234)
+_RLE_REFERENCE_STREAM = bytes.fromhex(
+    "0800000001341235128236120200f8e0073412")
 _REFERENCE_STREAM = bytes.fromhex(
     "7135363508000000fe34126b6bc1fe00f876270000000000000001")
 
@@ -585,8 +647,16 @@ def _selftest():
     rgb = bytes([0, 0, 0, 255, 255, 255])
     if rgb888_to_rgb565(rgb, 2, 1) != bytes([0x00, 0x00, 0xFF, 0xFF]):
         raise PudError("RGB565 packing mismatch")
+    got = rle_encode(_REFERENCE_PIXELS)
+    if got != _RLE_REFERENCE_STREAM:
+        raise PudError("RLE encoder mismatch:\n  got %s\n  want %s"
+                       % (got.hex(), _RLE_REFERENCE_STREAM.hex()))
+    if rle_encode(struct.pack("<8H", *_REFERENCE_PIXELS)) != _RLE_REFERENCE_STREAM:
+        raise PudError("RLE encoder differs between the tuple and bytes paths")
+
     print("pud_usb self-test OK")
     print("  QOI encoder matches the C library reference vector")
+    print("  RLE encoder matches the C library reference vector")
     print("  band limit %d pixels, %d bytes per transfer"
           % (PUD_MAX_BAND_PIXELS, USB_TRANS_MAX_SIZE))
     try:

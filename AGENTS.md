@@ -85,7 +85,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
-| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排 |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排 |
 | `OVERCLOCK_ENABLED` | `0` | 150 MHz，稳定性优先 |
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |
@@ -96,8 +96,8 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   这是首选的验证方式。
 - **依赖选型**：`pyusb` + `Pillow`（≈3 MB，用来替代 `opencv-python` 的 ≈60 MB）；
   视频/录屏用 `ffmpeg` CLI；`numpy` **可选**（只影响 RGB565 打包速度）。
-- **只保留一份 QOI 编码器**：`scripts/pud_usb.py`，与固件/驱动的 `rgb565_qoi.c`
-  **逐字节一致**（`python3 scripts/pud_usb.py` 自检）。新脚本必须复用它，
+- **每种编码器只保留一份**，都在 `scripts/pud_usb.py`：QOI 与 RLE 各自与它们的 C 库
+  **逐字节一致**（`python3 scripts/pud_usb.py` 自检里有参考向量）。新脚本必须复用它们，
   不要再写第二份编码器或第二套协议常量。
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被

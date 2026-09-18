@@ -77,3 +77,4 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。
 - `notes/` 里引用 `CMakeLists.txt` 时**别写行号** —— 已经漂过一次（加 tjpgd 链接行之后）。
 - 提交与推送是两件事：默认**只提交、不推送**，推送需要人工放行（见仓库根 `AGENTS.md` 铁律 1）。
+  目前挂着的本地提交：固件仓 8 个、驱动仓 3 个、`rgb565-rle` 仓 1 个（RLE 的 run 批量填充）。

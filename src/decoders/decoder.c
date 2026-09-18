@@ -362,6 +362,68 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 	STAT_DRAW_ADD();
 }
 
+/*
+ * RGB565 RLE (vendored in src/decoders/rle/).
+ *
+ * Same shape as the QOI path: the library decodes into two ping-pong buffers
+ * and calls back once per batch, so a batch can be pushed to the panel while
+ * the next one is decoded.  It keeps no state of its own, so unlike the JPEG
+ * decoders there is no workspace to account for.
+ */
+#include "rgb565_rle.h"
+
+#define RLE_BUF_ROWS 8
+
+/* 480 x RLE_BUF_ROWS pixels per accumulation buffer, two ping-pong buffers */
+static uint16_t rle_buf_a[480 * RLE_BUF_ROWS];
+static uint16_t rle_buf_b[480 * RLE_BUF_ROWS];
+
+struct rle_draw_ctx {
+	uint16_t ox;
+	uint16_t oy;
+};
+
+static void rle_flush(const uint16_t *pixels, size_t count,
+		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
+		      void *user_data)
+{
+	struct rle_draw_ctx *ctx = (struct rle_draw_ctx *)user_data;
+
+	STAT_FLUSH_T0();
+	/* asynchronous, same contract as the QOI flush: the buffer may only be
+	 * reused once the next flush (or the wait below) has completed it. */
+	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
+			      ctx->ox + xe, ctx->oy + ye,
+			      (void *)pixels, count * 2);
+	STAT_FLUSH_ADD(count);
+}
+
+void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
+{
+	struct rle_draw_ctx ctx;
+	uint16_t width = xe - xs + 1;
+	size_t buf_cap;
+
+	if (rle_data == NULL || rle_size == 0 || width == 0 || width > 480)
+		return;
+
+	ctx.ox = xs;
+	ctx.oy = ys;
+
+	/* whole rows per batch, capped at the static buffers */
+	buf_cap = (size_t)width * RLE_BUF_ROWS;
+	if (buf_cap > 480 * RLE_BUF_ROWS)
+		buf_cap = 480 * RLE_BUF_ROWS;
+
+	STAT_T0();
+	rgb565_rle_decompress_callback(rle_data, rle_size, width,
+				       rle_buf_a, rle_buf_b,
+				       buf_cap, rle_flush, &ctx);
+	/* the last batch is still in flight; the frame is not done until it lands */
+	tft_async_video_wait();
+	STAT_DRAW_ADD();
+}
+
 void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
 {
 	/* Called from the USB ISR only, so no blocking is allowed. The decoder
@@ -503,7 +565,7 @@ static void decoder_task(void *param)
 
 /* Indexed by DECODER_TYPE.  The numbering must not shift: the device reports
  * this value to the host through PUD_CMD_GET_CAPS. */
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI", "RLE" };
 
 void decoder_init(void)
 {

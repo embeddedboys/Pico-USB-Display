@@ -60,7 +60,8 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `load_image(path, w, h, fit)` | 解码图片为 RGB888（Pillow→cv2 依次尝试） |
 | `video_frames(path, w, h, fps, fit)` | ffmpeg 管道逐帧产出 RGB888 |
 | `ffmpeg_frames(cmd, w, h)` | 通用 ffmpeg 取帧（录屏脚本复用它） |
-| `qoi_encode(px)` / `rgb888_to_rgb565()` / `crop_rgb565()` | 编码与像素工具 |
+| `qoi_encode(px)` / `rle_encode(px)` | 编码器，各自与 C 库逐字节一致（自检验证） |
+| `rgb888_to_rgb565()` / `crop_rgb565()` | 像素工具 |
 
 `send_*` 会校验矩形是否越出面板（超界直接报错，而不是发出一个被硬件裁掉的窗口），
 也会按**设备上报**的 `frame_max` 校验载荷大小（`open_device()` 时问一次，见下）。
@@ -75,6 +76,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
 | `lz4_img_viewer.py` | 用 LZ4 解码器显示图片（需 `DECODER_TYPE=2`） | lz4 |
+| `codec_compare.py` | QOI 与 RLE 同内容端到端对比（需按构型分两次跑） | numpy |
 | `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
 
 典型用法：

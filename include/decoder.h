@@ -32,6 +32,9 @@
 #define DECODER_USE_JPEGDEC   1
 #define DECODER_USE_LZ4       2
 #define DECODER_USE_QOI       3
+/* RGB565 RLE, the codec from the rgb565-rle library (see src/decoders/rle/).
+ * Added after QOI, so it takes the next free number. */
+#define DECODER_USE_RLE       4
 
 #ifndef DECODER_TYPE
 	#define DECODER_TYPE DECODER_USE_JPEGDEC
@@ -48,6 +51,7 @@ extern void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpe
 extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
 extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size);
 extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size);
+extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size);
 
 extern void decoder_init(void);
 extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
@@ -63,6 +67,8 @@ extern bool decoder_slot_free(void);
 	#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_QOI
 	#define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
+#elif DECODER_TYPE == DECODER_USE_RLE
+	#define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
 #else
 	#error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */

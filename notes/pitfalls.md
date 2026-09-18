@@ -341,7 +341,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 ### 4.2 `decoder_names[]` 必须包含所有类型
 
 ```c
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI", "RLE" };
 ```
 
 这个数组曾漏掉 `"QOI"`，而 `DECODER_TYPE=3` 会越界读。加解码器时同步这里；

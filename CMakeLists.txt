@@ -67,6 +67,9 @@ add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 #  1  | JPEGDEC  |  jpeg   |
 #  2  |  lz4     |  lz4    |
 #  3  |  qoi     |  qoi    |
+#  4  |  rle     |  rle    |
+# The numbers are a protocol field: the device reports the selected decoder
+# through PUD_CMD_GET_CAPS, so do not renumber them.
 set(DECODER_TYPE 3)
 
 # Decode / display-path timing counters (g_qoi_stat_* in src/decoders/decoder.c).
@@ -101,6 +104,7 @@ target_link_libraries(${PROJECT_NAME}
     tjpgd
     lz4
     qoi
+    rle
     FreeRTOS-Kernel-Heap3
 )
 
