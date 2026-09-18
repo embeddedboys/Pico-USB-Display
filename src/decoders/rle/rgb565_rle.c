@@ -245,6 +245,7 @@ size_t rgb565_rle_compress(const uint16_t *pixels,
     return (size_t)(dst - output);
 }
 
+RGB565_RLE_SECTION
 size_t rgb565_rle_decompress(const uint8_t *input,
                              size_t input_size,
                              uint16_t *pixels,
@@ -331,6 +332,7 @@ size_t rgb565_rle_decompress(const uint8_t *input,
     return pixel_count;
 }
 
+RGB565_RLE_SECTION
 size_t rgb565_rle_decompress_callback(const uint8_t *input,
                                       size_t input_size,
                                       uint16_t width,

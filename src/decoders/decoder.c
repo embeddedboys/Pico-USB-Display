@@ -28,6 +28,7 @@
 #include "decoder.h"
 #include "lz4.h"
 #include "usb.h"
+#include "pud.h"		/* PUD_EP1_HEADER_SIZE, the EP1 framing */
 #include "bootlogo.h"
 
 #include "pico/time.h"
@@ -36,8 +37,6 @@
 #include "task.h"
 #include "semphr.h"
 
-uint16_t decoder_xs, decoder_ys;
-uint16_t decoder_xe, decoder_ye;
 
 struct jpegdec_data {
 	JPEGIMAGE img;
@@ -306,11 +305,14 @@ volatile u32 g_qoi_stat_frames;    /* qoi_drawimg() calls */
  * self-contained block for that rectangle. Nothing about the protocol changes:
  * a band is just the rectangle of this transfer, as for the other codecs.
  *
- * The buffer is sized by that same rule plus one pixel, because the device
- * rounds ((PUD_MAX_TRANSFER - 16) / 3) where the host rounds
- * ((min(65535, frame_max) - 16) / 3), so any band the host may send fits.
+ * The buffer is sized by that same rule plus one pixel: the device rounds
+ * ((PUD_MAX_TRANSFER - PUD_EP1_HEADER_SIZE - 16) / 3) where the host rounds
+ * ((min(65535, frame_max) - PUD_EP1_HEADER_SIZE - 16) / 3), so any band the
+ * host may send fits.  The 16 bytes are the codec's own framing (QOI's header
+ * plus end marker), the 12 are the EP1 header in front of every payload.
  */
-#define LZ4_BAND_PIXELS (((PUD_MAX_TRANSFER - 16) / 3) + 1)
+#define LZ4_BAND_PIXELS \
+	(((PUD_MAX_TRANSFER - PUD_EP1_HEADER_SIZE - 16) / 3) + 1)
 static uint16_t lz4_band[LZ4_BAND_PIXELS] __attribute__((aligned(4)));
 
 /* Readable from a debugger, like the frame counters below.  A non-zero value
@@ -367,12 +369,29 @@ void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
  */
 #include "rgb565_qoi.h"
 
+#ifndef QOI_BUF_ROWS
 #define QOI_BUF_ROWS 8
+#endif
+/* 0 = callback API only, 1 = non-callback without overlap (measurement only),
+ * 2 = non-callback with band ping-pong (default; see qoi_drawimg). */
+#ifndef QOI_NONCALLBACK
+#define QOI_NONCALLBACK 2
+#endif
 
 /* 480 x QOI_BUF_ROWS pixels per accumulation buffer, two ping-pong buffers */
 static uint16_t qoi_buf_a[480 * QOI_BUF_ROWS];
 #if PUD_DECODER_PINGPONG
 static uint16_t qoi_buf_b[480 * QOI_BUF_ROWS];
+#endif
+
+#if QOI_NONCALLBACK >= 2
+/* Two whole-band buffers: one is being written to the panel while the next
+ * band is decoded into the other (see qoi_drawimg). */
+static uint16_t qoi_band[2 * LZ4_BAND_PIXELS] __attribute__((aligned(4)));
+static unsigned qoi_band_next;
+#elif QOI_NONCALLBACK
+/* One whole-band buffer, without the overlap (for A/B measurements). */
+static uint16_t qoi_band[LZ4_BAND_PIXELS] __attribute__((aligned(4)));
 #endif
 
 struct qoi_draw_ctx {
@@ -417,6 +436,49 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 
 	ctx.ox = xs;
 	ctx.oy = ys;
+
+#if QOI_NONCALLBACK
+	/*
+	 * Non-callback path: decode the whole transfer as one image into one
+	 * band-sized buffer and flush it in a single window.  This is possible
+	 * because the host bands every transfer by band_pixels, so one transfer
+	 * is one rectangle that fits this buffer -- the same argument LZ4 relies
+	 * on.  It is a lot faster than the streaming callback API (that one pays
+	 * a per-pixel accumulate/capacity/callback check), and with two buffers
+	 * the panel write of one band overlaps the decode of the next.
+	 */
+	{
+		size_t rect_px = (size_t)width * (size_t)(ye - ys + 1);
+
+		if (rect_px <= LZ4_BAND_PIXELS) {
+#if QOI_NONCALLBACK >= 2
+			uint16_t *buf = qoi_band + qoi_band_next * LZ4_BAND_PIXELS;
+#else
+			uint16_t *buf = qoi_band;
+#endif
+
+			STAT_T0();
+			if (rgb565_qoi_decompress(qoi_data, qoi_size,
+						  buf, rect_px) == rect_px) {
+				STAT_FLUSH_T0();
+				tft_async_video_flush(xs, ys, xe, ye,
+						      buf, rect_px * 2);
+				STAT_FLUSH_ADD(rect_px);
+#if QOI_NONCALLBACK >= 2
+				/* The next flush's window command waits for this
+				 * transfer (i80_finish_pending), by which time the
+				 * next band has been decoded into the other buffer,
+				 * so decode and panel write overlap. */
+				qoi_band_next ^= 1u;
+#else
+				tft_async_video_wait();
+#endif
+			}
+			STAT_DRAW_ADD();
+			return;
+		}
+	}
+#endif
 
 	/* Keep batches aligned to whole rows: a multiple of the frame width,
 	 * capped at the static buffer size. */
@@ -512,18 +574,6 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
 	/* the last batch is still in flight; the frame is not done until it lands */
 	tft_async_video_wait();
 	STAT_DRAW_ADD();
-}
-
-void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
-{
-	/* Called from the USB ISR only, so no blocking is allowed. The decoder
-	 * task reads the window from the submitted frame instead of these
-	 * globals.
-	 */
-	decoder_xs = xs;
-	decoder_ys = ys;
-	decoder_xe = xe;
-	decoder_ye = ye;
 }
 
 /*

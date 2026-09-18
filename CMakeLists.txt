@@ -107,6 +107,32 @@ set(DECODER_STATS 0 CACHE STRING "collect g_qoi_stat_* decode/display timings")
 #   cmake .. -DPUD_DECODER_PINGPONG=0
 set(PUD_DECODER_PINGPONG 1 CACHE STRING "overlap QOI/RLE batch decode with the panel write")
 
+# Run the QOI/RLE per-pixel decode loops from SRAM instead of XIP flash, using
+# the codec libraries' RGB565_*_SECTION hook (the vendored files stay identical
+# to their upstream repositories).  Measured on the RP2350: 6~9% off the
+# device-side decode for ~2.3 KB of RAM, and nothing end to end while the USB
+# link is the bottleneck -- details in notes/architecture.md:
+#   cmake .. -DPUD_CODEC_IN_RAM=0
+set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
+
+# QOI decode path.  The non-callback API decodes a whole rectangle into one
+# band buffer and is ~40% faster per pixel than the streaming callback API; the
+# band ping-pong then overlaps the panel write with the next decode.  It costs
+# two band buffers (2 x (PUD_MAX_TRANSFER-16)/3 x 2 B = 87 KB at 64 KB
+# transfers), so it is for RP2350 only -- RP2040 (256 KB SRAM) keeps the
+# streaming path.  0 also forces the callback path on RP2350, which is what the
+# oversized-rectangle fallback uses anyway.  Measurements in notes/decoders.md:
+#   cmake .. -DQOI_NONCALLBACK=0
+if(PICO_PLATFORM MATCHES "^rp2350" OR PICO_BOARD STREQUAL "pico2")
+    set(_qoi_noncallback_default 2)
+else()
+    set(_qoi_noncallback_default 0)
+endif()
+set(QOI_NONCALLBACK ${_qoi_noncallback_default} CACHE STRING
+    "QOI: 0=callback, 1=non-callback, 2=non-callback + band ping-pong")
+# Batch height of the callback path (fallback for oversized rectangles).
+set(QOI_BUF_ROWS 8 CACHE STRING "QOI callback-path accumulation buffer height in rows")
+
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
@@ -143,6 +169,8 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})
+target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_BUF_ROWS=${QOI_BUF_ROWS})
+target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_NONCALLBACK=${QOI_NONCALLBACK})
 
 pico_enable_stdio_usb(${PROJECT_NAME} 0)
 pico_enable_stdio_uart(${PROJECT_NAME} 1)

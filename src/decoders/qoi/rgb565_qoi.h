@@ -18,6 +18,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * Optional placement hook.
+ *
+ * Define RGB565_QOI_SECTION (on the command line, or before including this header) to
+ * have the decompression entry points -- the per-pixel loops -- emitted into a
+ * specific section, e.g. to run them from SRAM on an MCU that otherwise
+ * executes from XIP flash:
+ *
+ *   -DRGB565_QOI_SECTION=__attribute__((section(".time_critical.qoi")))
+ *
+ * Empty by default, so the library stays portable freestanding C99.
+ */
+#ifndef RGB565_QOI_SECTION
+#define RGB565_QOI_SECTION
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -125,7 +141,7 @@ size_t rgb565_qoi_compress(const uint16_t *pixels,
  *          or 0 on error (NULL pointer, bad magic, malformed data,
  *          insufficient capacity, truncated input).
  */
-size_t rgb565_qoi_decompress(const uint8_t *input,
+RGB565_QOI_SECTION size_t rgb565_qoi_decompress(const uint8_t *input,
                              size_t input_size,
                              uint16_t *pixels,
                              size_t pixel_capacity);
@@ -188,7 +204,7 @@ typedef void (*rgb565_qoi_callback)(const uint16_t *pixels,
  *          or 0 on error (NULL pointer, width == 0, buf_capacity == 0,
  *          malformed data, truncated input).
  */
-size_t rgb565_qoi_decompress_callback(const uint8_t *input,
+RGB565_QOI_SECTION size_t rgb565_qoi_decompress_callback(const uint8_t *input,
                                       size_t input_size,
                                       uint16_t width,
                                       uint16_t *buf_a,

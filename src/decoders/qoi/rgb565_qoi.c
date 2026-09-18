@@ -270,6 +270,7 @@ size_t rgb565_qoi_compress(const uint16_t *pixels,
     return (size_t)p;
 }
 
+RGB565_QOI_SECTION
 size_t rgb565_qoi_decompress(const uint8_t *input,
                              size_t input_size,
                              uint16_t *pixels,
@@ -403,6 +404,7 @@ size_t rgb565_qoi_decompress(const uint8_t *input,
     return (size_t)px_pos;
 }
 
+RGB565_QOI_SECTION
 size_t rgb565_qoi_decompress_callback(const uint8_t *input,
                                       size_t input_size,
                                       uint16_t width,

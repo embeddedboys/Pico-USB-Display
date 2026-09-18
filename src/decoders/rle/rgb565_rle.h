@@ -17,6 +17,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * Optional placement hook.
+ *
+ * Define RGB565_RLE_SECTION (on the command line, or before including this header) to
+ * have the decompression entry points -- the per-pixel loops -- emitted into a
+ * specific section, e.g. to run them from SRAM on an MCU that otherwise
+ * executes from XIP flash:
+ *
+ *   -DRGB565_RLE_SECTION=__attribute__((section(".time_critical.rle")))
+ *
+ * Empty by default, so the library stays portable freestanding C99.
+ */
+#ifndef RGB565_RLE_SECTION
+#define RGB565_RLE_SECTION
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -98,7 +114,7 @@ size_t rgb565_rle_compress(const uint16_t *pixels,
  *          or 0 on error (NULL pointer, malformed data, insufficient capacity,
  *          truncated input).
  */
-size_t rgb565_rle_decompress(const uint8_t *input,
+RGB565_RLE_SECTION size_t rgb565_rle_decompress(const uint8_t *input,
                              size_t input_size,
                              uint16_t *pixels,
                              size_t pixel_capacity);
@@ -161,7 +177,7 @@ typedef void (*rgb565_rle_callback)(const uint16_t *pixels,
  *          or 0 on error (NULL pointer, width == 0, buf_capacity == 0,
  *          malformed data, truncated input).
  */
-size_t rgb565_rle_decompress_callback(const uint8_t *input,
+RGB565_RLE_SECTION size_t rgb565_rle_decompress_callback(const uint8_t *input,
                                       size_t input_size,
                                       uint16_t width,
                                       uint16_t *buf_a,

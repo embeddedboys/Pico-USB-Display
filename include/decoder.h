@@ -44,8 +44,6 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 
-extern uint16_t decoder_xs, decoder_ys;
-extern uint16_t decoder_xe, decoder_ye;
 
 extern void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
 extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
@@ -54,7 +52,6 @@ extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_si
 extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size);
 
 extern void decoder_init(void);
-extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
 extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye,
 				 const u8 *data, u32 size);
 extern bool decoder_slot_free(void);
