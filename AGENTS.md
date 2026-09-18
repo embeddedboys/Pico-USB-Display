@@ -80,6 +80,15 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 8. **`include/bootlogo.h` 是按 `DECODER_TYPE` 分支的 4500+ 行大数组**：
    用编辑器的精确替换改，**不要用 `sed -i` 之类批处理**
    （曾因参数列表过长把文件清空，靠 `git checkout` 才恢复）。
+   LZ4 那一支是**band 容器**（`[count][offsets][blocks]`，每 band 一个 block），
+   不是单个整帧 block —— 原因见第 9 条；`decoder_draw_bootlogo()` 按 `height / count`
+   推 band 高度，所以**重新生成时 band 高度必须整除面板高度**。
+9. **LZ4 一个 block 不能分块解码**：每个 match 都指回同一 block 之前解出的输出，所以
+   整块必须落进一块连续缓冲，该缓冲同时是字典。因此**设备一次只持有一个 band**
+   （`lz4_band[43680]`，按主机分带用的同一个 `band_pixels` 规则定尺寸），
+   **主机必须按 `PUD_CMD_GET_CAPS` 上报的 `band_pixels` 分带**，一个传输一个自包含 block。
+   放不下或解码长度与窗口不符就计数丢弃（`g_decoder_stat_lz4_*`），**不要截断**。
+   整帧 307200 B 的 block 永远解不了 —— 旧实现每帧 `malloc` 308 KB 就是这么坏的。
 
 ## 当前配置（改前先读 notes）
 
@@ -96,12 +105,16 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   这是首选的验证方式。
 - **依赖选型**：`pyusb` + `Pillow`（≈3 MB，用来替代 `opencv-python` 的 ≈60 MB）；
   视频/录屏用 `ffmpeg` CLI；`numpy` **可选**（只影响 RGB565 打包速度）。
-- **每种编码器只保留一份**，都在 `scripts/pud_usb.py`：QOI 与 RLE 各自与它们的 C 库
-  **逐字节一致**（`python3 scripts/pud_usb.py` 自检里有参考向量）。新脚本必须复用它们，
-  不要再写第二份编码器或第二套协议常量。
+- **每种编码器只保留一份**，都在 `scripts/pud_usb.py`（`ENCODERS`）：QOI 与 RLE 各自与
+  它们的 C 库**逐字节一致**（`python3 scripts/pud_usb.py` 自检里有参考向量），LZ4 用
+  `lz4.block`（就是内核链接的那份 liblz4；它的码流**跨版本不保证逐字节一致**，但都能解）。
+  新脚本必须复用它们，不要再写第二份编码器或第二套协议常量。
+  发图统一走 `Display.send_rgb565(..., codec=...)`，**分带由它负责**（LZ4 尤其不能整帧发）。
 - `tools/pudcodec` 是 C 写的**离线**转换器（图片/帧序列 ↔ 码流），编解码类型运行时用
   `--codec` 指定；构建 `cmake -S tools -B tools/build`，`stb` 已 vendor 不需要联网。
   它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `scripts/check_pudcodec.py` 对拍。
+  `--codec lz4` 输出的是 **band 容器**（每 band 一个 block，`--band` 默认取能整除高度的
+  最大行数），因为整帧 block 设备解不了（见"架构不变量"第 9 条）。
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被
   `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。
@@ -113,8 +126,9 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 - 新增源文件/目录要加进对应的 `CMakeLists.txt`（`PUD_SOURCES` 或子目录）。
 - **调试打印要算代价**：115200 波特下每行约 1~3 ms，
   **不要放进每帧路径**。已知例子：EP2 查询路径的 `usb_hexdump` + `USB_LOG_WRN`
-  实测 **9.6 ms/次**；`lz4_drawimg()` 每帧 3 行 `printf` 约 10 ms。
-- 大块缓冲不要每帧 `malloc`（`lz4_drawimg()` 每帧申请 ~307 KB 是待修项）。
+  实测 **9.6 ms/次**（`lz4_drawimg()` 也曾每帧 3 行 `printf`，约 10 ms，已随 LZ4 重写删掉）。
+- 大块缓冲不要每帧 `malloc`（LZ4 曾每帧申请 ~307 KB，已改成静态 band 缓冲；
+  解码器一律用静态缓冲或调用方缓冲）。
 
 ## 文档维护
 

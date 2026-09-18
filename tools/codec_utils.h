@@ -32,28 +32,30 @@ int pud_write_codec_header(FILE *out, const char *codec,
 int pud_write_binary(FILE *out, const uint8_t *data, size_t size);
 
 /*
- * Write a frame sequence as a C header: the dimensions, the frame count, a
- * byte-offset table and the concatenated frames.  Frame 0's size is a define
- * too, so a single frame can be decoded straight out of the header.
+ * Write a block sequence as a C header: the dimensions, the block count, a
+ * byte-offset table and the concatenated blocks.  Block 0's size is a define
+ * too, so a single block can be taken straight out of the header.
  *
- * Returns 0 on success.
+ * A container is a list of blocks: for a video each block is a frame, for LZ4
+ * each block is a band (`unit` only names them in the comment).  Returns 0 on
+ * success.
  */
 int pud_write_video_header(FILE *out, const char *codec, const char *base_name,
-			   int width, int height, uint8_t *const *frames,
-			   const size_t *sizes, int frame_count,
-			   size_t total_raw);
+			   const char *unit, int width, int height,
+			   uint8_t *const *blocks, const size_t *sizes,
+			   int count, size_t total_raw);
 
 /*
- * Write a frame sequence as the binary container:
+ * Write a block sequence as the binary container:
  *
- *   [u32 frame_count][u32 offsets[frame_count + 1]][frame data...]
+ *   [u32 block_count][u32 offsets[block_count + 1]][block data...]
  *
  * with offsets in file order and the last one equal to the file size.
  *
  * Returns 0 on success.
  */
-int pud_write_video_binary(FILE *out, uint8_t *const *frames,
-			   const size_t *sizes, int frame_count);
+int pud_write_video_binary(FILE *out, uint8_t *const *blocks,
+			   const size_t *sizes, int count);
 
 /* Read a whole file into a malloc'd, NUL-terminated buffer.  NULL on error. */
 uint8_t *pud_read_file(const char *path, size_t *size);

@@ -8,9 +8,65 @@
 | --- | --- | --- | --- |
 | 0 | tjpgd | JPEG | 可用（ChaN TJpgDec，见下）；局刷正确但慢 |
 | 1 | JPEGDEC | JPEG | 可用且更快，但**局部刷新会把显示路径写死**（见下） |
-| 2 | LZ4 | LZ4 | 可用 |
+| 2 | LZ4 | LZ4 | 可用；**每个传输一个 band**（block 不能分块解码，见下） |
 | 3 | **QOI** | RGB565 QOI | **当前使用**（全屏比两种 JPEG 快 12~20 倍） |
 | 4 | RLE | RGB565 RLE | 可用；高熵内容比 QOI 小，结构化内容比 QOI 大（见下） |
+
+### LZ4（2026-09 重新设计）
+
+**为什么有 LZ4**：Linux 内核自带 LZ4（`lib/lz4/`，`LZ4_compress_default()` 与
+`LZ4_decompress_safe()` 都 `EXPORT_SYMBOL`），驱动用它就不必把 QOI/RLE 的编解码源文件
+vendor 进内核。所以设备侧这条解码路径必须真的能用。
+
+**为什么不能像 QOI/RLE 那样解**：LZ4 的 block 格式里每个 match 都指回**同一 block** 之
+前产生的输出，所以一个 block 必须一次性落进**一块连续缓冲**，这块缓冲同时就是字典。
+整帧 480×320 = 307200 B，旧实现 `malloc(LZ4_compressBound(frame))` ≈ 308 KB 在设备上
+永远失败（可用 SRAM 只有 ~290 KB），每帧还有 3 行 `printf`（115200 波特下约 3 ms）。
+
+**现在的设计**：设备只持有**一个 band**，不是一帧。主机按**和 QOI/RLE 完全相同**的规则
+分带（`band_pixels`，来自 `PUD_CMD_GET_CAPS`），每个传输里的 LZ4 block 就是该矩形自包含
+的码流；`lz4_drawimg()` 解到静态 `lz4_band[]` 里再整带刷屏。**协议没有新增字段**：band
+就是这个传输的矩形，和其它解码器一样。
+
+```c
+#define LZ4_BAND_PIXELS (((PUD_MAX_TRANSFER - 16) / 3) + 1)   /* 21840 px = 43680 B */
+static uint16_t lz4_band[LZ4_BAND_PIXELS];
+```
+
+缓冲按主机分带用的同一个规则定尺寸（多留 1 像素，覆盖两侧取整差异），所以主机按
+`band_pixels` 发的任何 band 都放得下。放不下或解码长度与窗口不符时**丢弃并计数**，
+不截断：
+
+| 计数（gdb 可读） | 含义 |
+| --- | --- |
+| `g_decoder_stat_lz4_oversize` | band 比 `lz4_band[]` 大（主机分带太粗） |
+| `g_decoder_stat_lz4_bad` | 解码长度 ≠ 窗口像素数（截断/损坏/窗口与码流不符） |
+
+**开机 logo**：LZ4 构型不能用一个整帧 block，所以它的 logo 是**band 容器**——
+`[count][offsets][blocks]`，每个 band 一个 block，band 高度由 `height / count` 推出
+（`decoder_draw_bootlogo()`）。生成方式见 [scripts.md](scripts.md)，重新生成的这一支
+**同时修掉了**"LZ4 分支与其它三支不是同一张图"的老问题。
+
+**实测（480×320，分带，`scripts/codec_compare.py`，20 帧）**：
+
+| 内容 | LZ4 字节/帧 | LZ4 端到端 | QOI | RLE |
+| --- | --- | --- | --- | --- |
+| solid | 1297 | **7.00 ms** | 7.99 ms | 5.69 ms |
+| gradient | 29971 | **30.73 ms** | 35.96 ms | 47.71 ms |
+| photo | 171689 | 157.33 ms | **127.49 ms** | 206.98 ms |
+| noise | 308417 | 276.40 ms | 422.85 ms | **275.74 ms** |
+
+LZ4 的压缩率在结构化内容上明显好于 RLE、和 QOI 各有胜负，高熵内容与 RLE 相当。
+代价（LZ4 构型）：静态 RAM 247276 B（QOI 构型 218944 B，多出的就是 43680 B 的
+`lz4_band`，同时少了其它解码器的乒乓缓冲），flash 因为下面的 `--gc-sections` 修正反而更小。
+
+**还没做**：整带解完才刷屏，解码与面板传输没有重叠（QOI/RLE 靠乒乓重叠了）。要重叠得再
+加一块 band 缓冲（+43680 B）并去掉 drawimg 末尾的 wait，收益只在纯色这种"载荷极小、
+解码占比大"的内容上，未测。
+
+> **LZ4 码流不是跨版本逐字节一致的**：vendored 的是 liblz4 1.10.0，板子上 python-lz4
+> 4.4.5 带的是 1.9.x，同一条 band 有 3/8 压缩结果不同（都是合法 block）。设备只解压
+> （`LZ4_decompress_safe` 与版本无关），两条来源的码流**都在板上验证过像素精确**。
 
 ### RGB565 RLE 与 QOI（2026-09 实测）
 
@@ -195,6 +251,9 @@ faulting PC: usbd_ep_start_read+126, r2 = <TFT 数据>
 volatile u32 g_decoder_stat_submitted;   /* 收到的帧数 */
 volatile u32 g_decoder_stat_dropped;     /* 因无空闲槽被丢弃的帧数 */
 volatile u32 g_decoder_stat_drawn;       /* 已完成绘制的帧数 */
+volatile u32 g_decoder_stat_oversize;    /* 载荷装不进帧槽的帧数 */
+volatile u32 g_decoder_stat_lz4_oversize;/* LZ4: band 装不进 lz4_band[] */
+volatile u32 g_decoder_stat_lz4_bad;     /* LZ4: 解码长度与窗口不符 */
 ```
 
 声明为 `volatile` 以便调试器读取而不被优化掉。用法见 [debugging.md](debugging.md)。

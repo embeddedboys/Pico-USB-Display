@@ -70,13 +70,13 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 
 | 脚本 | 作用 | 依赖 |
 | --- | --- | --- |
-| `img_viewer.py` | 显示一张图片 | Pillow 或 cv2 |
+| `img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
 | `video_player.py` | 播放视频（不落盘） | ffmpeg |
 | `fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
-| `lz4_img_viewer.py` | 用 LZ4 解码器显示图片（需 `DECODER_TYPE=2`） | lz4 |
-| `codec_compare.py` | QOI 与 RLE 同内容端到端对比（需按构型分两次跑） | numpy |
+| `lz4_img_viewer.py` | 同上，LZ4 专用名字（需 `DECODER_TYPE=2`）；**分带**由 `pud_usb` 负责 | lz4 |
+| `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
 
 典型用法：
@@ -124,14 +124,16 @@ python3 scripts/xorg_desktop_share.py --fps 15 --stats
   `lz4_img_viewer.py`，换成 `0`/`1`（tjpgd / JPEGDEC）才能收 JPEG —— 发错格式不会崩，
   但屏幕上不动。**JPEG 只能整屏发（`x = y = 0`）**：JPEGDEC 在 `x != 0` 时会卡死显示，
   见 [decoders.md](decoders.md)。仓库里没有发 JPEG 的脚本，测试直接用
-  `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。
+  `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。**LZ4 必须分带**（`band_pixels`），
+  整帧 block 解不了。
 - `open_device()` 会顺带发一次 `PUD_CMD_GET_CAPS`，把设备的上限落到 `disp.frame_max` 与
   `disp.band_pixels`，`send_rgb565()` 按它分带；设备不认这条命令（老固件）时保留本机默认
   值（65535 B / 21839 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
 - 固件的 EP2 查询路径打了 UART 日志（`usb_hexdump` + `USB_LOG_WRN`），
   实测每次查询约 **9.6 ms** —— 需要频繁查询时先去掉这些打印。
-- `lz4_drawimg()` 每帧 `malloc`/`free` 约 307 KB 工作区、每帧 3 行 `printf`
-  （115200 波特下约 10 ms），且是整帧解码。用 LZ4 前值得先修这三点。
+- LZ4 已经重写：静态 band 缓冲、无 `printf`、每个传输一个 band（见
+  [decoders.md](decoders.md)）。要发 LZ4 就用 `--codec lz4` / `codec="lz4"`，
+  **不要试图整帧发**——设备会丢弃并让 `g_decoder_stat_lz4_oversize` 加一。
 
 ## 用 Xvfb 验证录屏脚本
 
@@ -180,11 +182,32 @@ pudcodec --codec <qoi|rle|lz4|jpeg> video2s [options] <frames...> # 帧序列 ->
 | `-n` | C 数组名 / 基名（默认从输出文件名推，取到第一个 `.` 为止） |
 | `-w` `-h` | `img2s`/`video2s` 是缩放目标；`s2img` 读 `.bin` 时**必须给**（码流里没有尺寸，JPEG 除外） |
 | `-q` | JPEG 质量，默认 95 |
+| `--band` | LZ4 only：每个 block 的行数（默认取"装得下且能整除高度"的最大值） |
 | `--raw` | `video2s` 的输入是拼接好的裸 RGB565 帧 |
 
 编解码对应关系：`jpeg` 覆盖设备侧的 `DECODER_TYPE` 0 和 1（两种 JPEG 解码器吃同一份
 码流），`lz4` 是 2、`qoi` 是 3、`rle` 是 4。工具会把 `decoder_type` 打在摘要里，
 省得回头翻文档。
+
+**LZ4 输出的是 band 容器**（`[count][offsets][blocks]`，每 band 一个 block），不是单个
+整帧 block：LZ4 block 不能分块解码，设备一次只持有一个 band（见
+[decoders.md](decoders.md) 与 `AGENTS.md` 第 9 条）。`--band` 不指定时取"装得下设备
+band 缓冲（43678 B）且能整除图像高度"的最大行数，这样 band 高度能从
+`block 数 / 图像高度` 推回来，`s2img` 与固件的开机 logo 才能重建。
+`video2s --codec lz4` 对每一帧都这样分带，容器是**扁平的**（帧优先，一帧内自上而下）。
+
+开机 logo 的 LZ4 分支就是这么生成的（`assets/bootlogo.jpg` 经无损 PNG 再转裸 RGB565）：
+
+```bash
+python3 -c "from PIL import Image; Image.open('assets/bootlogo.jpg').save('/tmp/logo.png')"
+python3 -c "
+import sys; sys.path.insert(0, 'scripts'); import pud_usb as P
+open('/tmp/logo.raw','wb').write(P.rgb888_to_rgb565(P.load_image('/tmp/logo.png',480,320,fit=False),480,320))"
+tools/build/pudcodec --codec lz4 video2s --raw /tmp/logo.raw -w 480 -h 40 -t bin -o /tmp/logo.lz4.bin
+```
+
+再把这串字节替换进 `include/bootlogo.h` 的 `#elif DECODER_TYPE == 2` 段
+（`check_pudcodec.py` 会验证这个分支与工具的产物逐字节相同）。
 
 ## 与固件/脚本的一致性（2026-09 实测）
 
@@ -201,16 +224,19 @@ python3 scripts/check_pudcodec.py     # 全部通过才返回 0
 | `s2img` 往返 | QOI/RLE/LZ4 都是 153600/153600 像素完全相同 |
 | `.h` 的 `_CODEC` / `_WIDTH` / `_HEIGHT` / `_SIZE` / 帧表 | 正确；`--codec auto` 能据此自动解码 |
 | JPEG 往返 | 最大 10 LSB、平均 0.20 LSB（有损，属正常） |
-| **`include/bootlogo.h` 的 QOI / RLE 分支** | 用同一张图重压，**逐字节相同**（29652 B / 49485 B） |
+| `img2s --codec lz4` 的 band 容器 | 结构正确、每 band 都装得下 43678 B、`s2img` 往返像素精确 |
+| **`include/bootlogo.h` 的 QOI / RLE / LZ4 分支** | 用同一张图重压，**逐字节相同**（29652 / 49485 / 17585 B） |
 
 两条**已知的不一致**（都是用压缩工具时要知道的）：
 
 - **JPEG 源图两条路径不逐字节相同**：`stb_image` 与 Pillow/libjpeg 解 JPEG 的取证
   （IDCT 舍入）不同，同一张 `bootlogo.jpg` 一个出 49485 B、一个出 49494 B。要比字节
   就用无损源（PNG）或 `--raw` 喂同一份 RGB565；差异 ≤1 LSB，屏上看不出来。
-- **LZ4 没有唯一编码**：工具（`LZ4_compress_default`）压同一张图是 15879 B，而
-  `include/bootlogo.h` 里那份是 18202 B —— 两者都能被 `LZ4_decompress_safe` 解开，
-  但**后者解出来的不是同一张图**（13% 像素不同，最大 21 LSB），见 [todo.md](todo.md)。
+- **LZ4 码流不跨版本逐字节一致**：工具 vendor 的 liblz4 是 1.10.0，板子上 python-lz4
+  4.4.5 带的是 1.9.x，同一条 band **8 条里有 3 条**压缩结果不同（都合法）。设备只解压，
+  `LZ4_decompress_safe` 与版本无关；两条来源的码流**都在板上验证过像素精确**
+  （工具生成的 bootlogo 资产、`pud_usb.lz4_encode` 发的帧）。要比字节就固定同一个
+  liblz4 版本。
 
 > RGB565 的打包用**截断**（`r >> 3`）而不是四舍五入，跟 `pud_usb.py` 保持一致 ——
 > 这是两条主机路径能逐字节对拍的前提。

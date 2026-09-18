@@ -242,30 +242,103 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 		printf("tjpgd: jd_decomp failed: %d\n", res);
 }
 
+/*
+ * Optional decode/display timing counters, shared by every decoder path
+ * (see DECODER_STATS in the top level CMakeLists.txt).  Off by default; read
+ * them with gdb, e.g.
+ *
+ *   printf "%u %u %u %u %u\n", g_qoi_stat_draw_us, g_qoi_stat_flush_us, ...
+ *
+ * Within one gdb session they only ever increase, so measure a delta around a
+ * known workload.
+ */
+#if DECODER_STATS
+volatile u32 g_qoi_stat_draw_us;   /* whole qoi_drawimg() */
+volatile u32 g_qoi_stat_flush_us;  /* time inside tft_video_flush() */
+volatile u32 g_qoi_stat_pixels;    /* pixels flushed */
+volatile u32 g_qoi_stat_calls;     /* qoi_flush() calls */
+volatile u32 g_qoi_stat_frames;    /* qoi_drawimg() calls */
+
+#define STAT_T0()          u32 _stat_t0 = time_us_32()
+#define STAT_DRAW_ADD()    do { g_qoi_stat_draw_us += time_us_32() - _stat_t0; \
+				g_qoi_stat_frames++; } while (0)
+#define STAT_FLUSH_T0()    u32 _stat_ft0 = time_us_32()
+#define STAT_FLUSH_ADD(n)  do { \
+		g_qoi_stat_flush_us += time_us_32() - _stat_ft0; \
+		g_qoi_stat_pixels += (n); g_qoi_stat_calls++; } while (0)
+#else
+#define STAT_T0()          do { } while (0)
+#define STAT_DRAW_ADD()    do { } while (0)
+#define STAT_FLUSH_T0()    do { } while (0)
+#define STAT_FLUSH_ADD(n)  do { } while (0)
+#endif
+
+/*
+ * LZ4 (block format, i.e. what LZ4_compress_default() produces -- the same
+ * function the kernel has built in, which is why this codec is here at all).
+ *
+ * An LZ4 block cannot be decoded in pieces: every match points back at output
+ * the same block produced earlier, so the whole block has to land in one
+ * contiguous buffer, and that buffer doubles as the dictionary.  A full
+ * 480x320 frame is 300 KB, which is why the old code's
+ * malloc(LZ4_compressBound(frame)) could never succeed here.
+ *
+ * The device therefore holds one *band*, not one frame. The host splits the
+ * damage rectangle the same way it already does for QOI and RLE -- by
+ * `band_pixels` from PUD_CMD_GET_CAPS -- and every transfer carries a
+ * self-contained block for that rectangle. Nothing about the protocol changes:
+ * a band is just the rectangle of this transfer, as for the other codecs.
+ *
+ * The buffer is sized by that same rule plus one pixel, because the device
+ * rounds ((PUD_MAX_TRANSFER - 16) / 3) where the host rounds
+ * ((min(65535, frame_max) - 16) / 3), so any band the host may send fits.
+ */
+#define LZ4_BAND_PIXELS (((PUD_MAX_TRANSFER - 16) / 3) + 1)
+static uint16_t lz4_band[LZ4_BAND_PIXELS] __attribute__((aligned(4)));
+
+/* Readable from a debugger, like the frame counters below.  A non-zero value
+ * means the host sent something this device cannot use: `oversize` is a band
+ * bigger than lz4_band[] (the host banded too coarsely), `bad` is a block that
+ * did not decode to exactly the window's worth of pixels (truncated, corrupt,
+ * or encoded for a different rectangle).  Both drop the band instead of
+ * drawing garbage. */
+volatile u32 g_decoder_stat_lz4_oversize;
+volatile u32 g_decoder_stat_lz4_bad;
+
 void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 {
-	printf("%s, size :%d\n", __func__, lz4_size);
-	char *lz4_workspace;
-	int max_compressed_size =
-		LZ4_compressBound(TFT_HOR_RES * TFT_VER_RES * 2);
-	printf("%s, lz4 compreess boud: %d\n", __func__, max_compressed_size);
+	u32 width = (u32)(xe - xs + 1);
+	u32 height = (u32)(ye - ys + 1);
+	u32 raw = width * height * 2u;
+	int got;
 
-	lz4_workspace = (char *)malloc(max_compressed_size);
-	if (lz4_workspace == NULL) {
-		printf("%s, malloc workspace failed!", __func__);
+	if (lz4_data == NULL || lz4_size == 0 || width == 0 || height == 0)
+		return;
+
+	if (raw > sizeof(lz4_band)) {
+		g_decoder_stat_lz4_oversize++;
 		return;
 	}
 
-	int decompressed_size =
-		LZ4_decompress_safe((char *)lz4_data, (char *)lz4_workspace,
-				    lz4_size, max_compressed_size);
-	printf("%s, decompressed_size: %d\n", __func__, decompressed_size);
-	if (decompressed_size < 0)
-		goto decompress_failed;
+	STAT_T0();
+	got = LZ4_decompress_safe((const char *)lz4_data, (char *)lz4_band,
+				  (int)lz4_size, (int)raw);
+	if (got != (int)raw) {
+		g_decoder_stat_lz4_bad++;
+		return;
+	}
 
-	tft_video_flush(xs, ys, xe, ye, lz4_workspace, decompressed_size);
-decompress_failed:
-	free(lz4_workspace);
+	STAT_FLUSH_T0();
+	/*
+	 * Asynchronous, then wait: a decoded band is only ever written once, so
+	 * unlike the QOI/RLE batches it does not need a ping-pong pair, but it
+	 * does have to be finished before the next band is decoded into the same
+	 * buffer.
+	 */
+	tft_async_video_flush(xs, ys, xe, ye, lz4_band, raw);
+	STAT_FLUSH_ADD(raw / 2u);
+	tft_async_video_wait();
+	STAT_DRAW_ADD();
 }
 
 /*
@@ -287,34 +360,6 @@ struct qoi_draw_ctx {
 	uint16_t ox;
 	uint16_t oy;
 };
-
-/* Optional decode/display timing counters (see DECODER_STATS in the top level
- * CMakeLists.txt). Off by default; read them with gdb, e.g.
- *
- *   printf "%u %u %u %u %u\n", g_qoi_stat_draw_us, g_qoi_stat_flush_us, ...
- *
- * Within one gdb session they only ever increase, so measure a delta around a
- * known workload. */
-#if DECODER_STATS
-volatile u32 g_qoi_stat_draw_us;   /* whole qoi_drawimg() */
-volatile u32 g_qoi_stat_flush_us;  /* time inside tft_video_flush() */
-volatile u32 g_qoi_stat_pixels;    /* pixels flushed */
-volatile u32 g_qoi_stat_calls;     /* qoi_flush() calls */
-volatile u32 g_qoi_stat_frames;    /* qoi_drawimg() calls */
-
-#define STAT_T0()          u32 _stat_t0 = time_us_32()
-#define STAT_DRAW_ADD()    do { g_qoi_stat_draw_us += time_us_32() - _stat_t0; \
-				g_qoi_stat_frames++; } while (0)
-#define STAT_FLUSH_T0()    u32 _stat_ft0 = time_us_32()
-#define STAT_FLUSH_ADD(n)  do { \
-		g_qoi_stat_flush_us += time_us_32() - _stat_ft0; \
-		g_qoi_stat_pixels += (n); g_qoi_stat_calls++; } while (0)
-#else
-#define STAT_T0()          do { } while (0)
-#define STAT_DRAW_ADD()    do { } while (0)
-#define STAT_FLUSH_T0()    do { } while (0)
-#define STAT_FLUSH_ADD(n)  do { } while (0)
-#endif
 
 static void qoi_flush(const uint16_t *pixels, size_t count,
 		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
@@ -525,6 +570,54 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+/*
+ * Draw the boot logo.
+ *
+ * QOI, RLE and both JPEG decoders store one stream for the whole panel, so the
+ * logo is just the first frame.  LZ4 cannot: a single block would have to be
+ * decoded in one piece (see lz4_drawimg()), so its logo is stored the way the
+ * device consumes it -- the same [count][offsets][data...] container the
+ * conversion tool writes for a frame sequence, one block per band, and the
+ * bands are uniform so the row height follows from the count.  Regenerating it
+ * is `pudcodec video2s --raw <raw565> -w 480 -h <rows> --codec lz4 -t bin`;
+ * see notes/scripts.md.
+ */
+static void decoder_draw_bootlogo(void)
+{
+#if DECODER_TYPE == DECODER_USE_LZ4
+	const u8 *p = (const u8 *)bootlogo;
+	u32 count = (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
+		   ((u32)p[3] << 24);
+	u32 rows;
+	u32 i;
+
+	if (count == 0 || count > TFT_VER_RES || TFT_VER_RES % count != 0)
+		return;   /* not a container: nothing sane to draw */
+	rows = TFT_VER_RES / count;
+
+	for (i = 0; i < count; i++) {
+		const u8 *e = p + 4u + 4u * (i + 1u);
+		u32 start = (u32)p[4u + 4u * i] |
+			    ((u32)p[4u + 4u * i + 1u] << 8) |
+			    ((u32)p[4u + 4u * i + 2u] << 16) |
+			    ((u32)p[4u + 4u * i + 3u] << 24);
+		u32 end = (u32)e[0] | ((u32)e[1] << 8) | ((u32)e[2] << 16) |
+			  ((u32)e[3] << 24);
+		u32 y = i * rows;
+
+		if (end <= start || end > sizeof(bootlogo))
+			break;
+		lz4_drawimg(0, (u16)y, TFT_HOR_RES - 1,
+			    (u16)(i + 1u == count ? TFT_VER_RES - 1
+						  : y + rows - 1),
+			    (u8 *)p + start, end - start);
+	}
+#else
+	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
+			(uint8_t *)bootlogo, sizeof(bootlogo));
+#endif
+}
+
 static void decoder_task(void *param)
 {
 	int i;
@@ -536,8 +629,7 @@ static void decoder_task(void *param)
 	 * here instead of in a task of its own both drops a task and makes
 	 * "the logo is the first thing drawn" a hard guarantee.  The USB side
 	 * is independent: enumeration runs on core 0 while this draws. */
-	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
-			(uint8_t *)bootlogo, sizeof(bootlogo));
+	decoder_draw_bootlogo();
 
 	busy_wait_ms(10);
 	backlight_set_level(100);

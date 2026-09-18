@@ -46,45 +46,39 @@ A/B 交替烧写、同一主机同一脚本、`full/solid（单次传输）`，�
 （`lib/pico-display-lib/configs/*.cmake` 里挑对应的板级配置）、实际解码性能（M0+ 比 M33 慢，
 "QOI 全屏 5 ms"这个量级大概率不成立）、`PIO_USE_DMA` 在 125 MHz 下的分频是否正确。
 
-## 4. LZ4 路径当前实际不可用
-
-`lz4_drawimg()` 每帧 `malloc(LZ4_compressBound(480*320*2))` ≈ **308 KB**，而可用 SRAM 只剩
-~238 KB —— **任何 heap 都跑不起来**（给 heap_4 静态切 320 KB 更放不下）。另外每帧 3 行
-`printf`（115200 波特下约 10 ms）且是整帧解码。要修：静态 workspace 或**分带解压**
-（与驱动的分带规则对齐），并去掉每帧打印。
-
-## 5. 堆失败可见性（与 heap 选型无关）
+## 4. 堆失败可见性（与 heap 选型无关）
 
 `configUSE_MALLOC_FAILED_HOOK 0` 且没有实现 `vApplicationMallocFailedHook()`；
 `xTaskCreate` 的返回值全都没检查。堆耗尽时的表现是**静默少一个任务**。
 `heap_3.c` 的 `pvPortMalloc` 里本来就有调用 hook 的分支，开配置 + 实现钩子即可（打印并停下）。
 
-## 6. RP2040 的栈溢出保护
+## 5. RP2040 的栈溢出保护
 
 RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP2350 上会 fault）。
 建议在那边的 port 上开 `configCHECK_FOR_STACK_OVERFLOW 2`（现在两边都是 0），
 或至少给关键任务留足余量。各任务实测峰值见 [debugging.md](debugging.md)。
 
-## 7. 可选：ISR 栈保护
+## 6. 可选：ISR 栈保护
 
 中断栈每核 2 KB，**没有 MSPLIM**，也没开 `PICO_USE_STACK_GUARDS`，溢出不会立刻 fault
 （"不要把解码放进 USB 中断"这条规矩的根源）。`PICO_USE_STACK_GUARDS=1` 是可选做法，
 **未验证**。
 
-## 8. `include/bootlogo.h` 的 LZ4 分支与其它三个不是同一张图
+## 7. 把 LZ4 接到驱动里（用户层已经验证完）
 
-用 `tools/pudcodec` 重压 `assets/bootlogo.jpg`（经无损 PNG）后：
+设备侧的 LZ4 解码已经重新设计并验证（见 [decoders.md](decoders.md)）：每个传输一个 band，
+主机按 `band_pixels` 分带即可。驱动侧要做的是：
 
-- QOI 分支 29652 B、RLE 分支 49485 B —— **逐字节可复现**（`scripts/check_pudcodec.py` 第 6 项）；
-- LZ4 分支 18202 B，而工具用 `LZ4_compress_default` 压同一张图是 15879 B。两份都能被
-  `LZ4_decompress_safe` 解开（都是 480×320 = 307200 B），但**解出来不是同一张图**：
-  20233/153600 个像素不同，单通道最大差 21 LSB。
+- 用**内核内置**的 `LZ4_compress_default()`（`lib/lz4`，`EXPORT_SYMBOL`）编码，
+  **不要**把 QOI/RLE 的源文件 vendor 进内核；
+- 按 `pud->max_band_pixels`（`PUD_CMD_GET_CAPS` 上报）分带 —— 和 QOI 用同一套分带逻辑，
+  因为 LZ4 的 band 上限就是同一个数（`(65535-16)/3` 像素），所以驱动不需要新字段；
+- 注意 band 的**原始**大小（`像素数 × 2`）也要 ≤ 那 43680 B，本设计里两者是同一个限制。
 
-即 LZ4 构型开机的 logo 与 QOI/RLE/JPEG 构型显示的不是同一份素材，那一支的生成来源已
-不可考。**未修**：LZ4 解码路径本身还不可用（每帧 308 KB `malloc`，见第 4 条），要修时
-顺手按同一张图重生成这一支（`tools/pudcodec --codec lz4 img2s` + 手工替换 `#elif == 2` 段）。
+驱动现在的 `rgb565_qoi.c` 就是"多余源文件"的例子，接完 LZ4 可以删掉。
+用户层怎么测的：`scripts/img_viewer.py --codec lz4`、`scripts/codec_compare.py --codec lz4`。
 
-## 9. 零碎
+## 8. 零碎
 
 - `main.c` 的 `frame_counter` 是死代码（无任何引用），可删。
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。

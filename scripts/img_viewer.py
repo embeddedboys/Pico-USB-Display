@@ -54,6 +54,8 @@ def main():
     ap.add_argument("--stretch", action="store_true",
                     help="stretch to the window instead of letterboxing")
     ap.add_argument("--repeat", "-r", type=int, default=1)
+    ap.add_argument("--codec", default="qoi", choices=sorted(pud_usb.ENCODERS),
+                    help="what the device is built for (DECODER_TYPE)")
     ap.add_argument("--timer", action="store_true")
     args = ap.parse_args()
 
@@ -73,7 +75,8 @@ def main():
             total = 0
             for _ in range(args.repeat):
                 bands, nbytes, secs = disp.send_rgb565(
-                    rgb565, win_w, win_h, args.x, args.y)
+                    rgb565, win_w, win_h, args.x, args.y,
+                    codec=args.codec)
                 total += nbytes
                 if args.timer or args.repeat == 1:
                     print("sent %d band(s), %d bytes in %.1f ms (%.2f MB/s)"

@@ -30,6 +30,7 @@ import pud_usb as P
 CODECS = {
     "qoi": P.qoi_encode,
     "rle": P.rle_encode,
+    "lz4": P.lz4_encode,
 }
 
 

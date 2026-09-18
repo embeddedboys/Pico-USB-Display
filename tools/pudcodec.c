@@ -24,6 +24,27 @@
 #define DEFAULT_JPEG_QUALITY 95
 #define MAX_FRAMES 4096
 
+/*
+ * The device decodes exactly one LZ4 band per transfer: an LZ4 block cannot be
+ * decoded in pieces (every match points back at output the same block produced
+ * earlier), so the whole block has to land in one buffer.  The band limit is
+ * therefore a device-side buffer, and it is the same one the driver already
+ * bands by -- `band_pixels` from PUD_CMD_GET_CAPS:
+ *
+ *   (65535 - 16) / 3 pixels   ->   * 2 bytes  =  43678 bytes
+ *
+ * A whole 480x320 frame is 307200 bytes, so anything but a tiny image has to be
+ * banded; `img2s`/`video2s` do that for LZ4 and emit a block container.
+ */
+#define LZ4_BAND_RAW_MAX (2 * ((65535 - 16) / 3))
+
+/* One encoded block: a whole image for every codec but LZ4, one band for LZ4. */
+struct blocks {
+	uint8_t *data[MAX_FRAMES];
+	size_t size[MAX_FRAMES];
+	int count;
+};
+
 enum mode {
 	MODE_NONE = 0,
 	MODE_IMG2S,
@@ -44,6 +65,7 @@ struct options {
 	int width;                   /* resize, or stream dimensions for s2img */
 	int height;
 	int quality;
+	int band;                    /* LZ4: rows per block (0 = as many as fit) */
 };
 
 static void usage(FILE *out, const char *prog)
@@ -75,6 +97,9 @@ static void usage(FILE *out, const char *prog)
 		"                  .bin stream in s2img\n"
 		"  -h <pixels>     height, same rules as -w\n"
 		"  -q <1..100>     JPEG quality (default %d)\n"
+		"  --band <rows>   LZ4 only: rows per block (default: as many as the\n"
+		"                  device's band buffer takes).  LZ4 is stored as a\n"
+		"                  block container, one block per band\n"
 		"  --raw <file>    video2s: one file of concatenated raw RGB565\n"
 		"                  frames instead of an image list (needs -w/-h)\n"
 		"  --help          this text\n"
@@ -124,6 +149,8 @@ static int parse_args(int argc, char **argv, struct options *opt)
 			opt->height = atoi(argv[++i]);
 		} else if (strcmp(arg, "-q") == 0 && i + 1 < argc) {
 			opt->quality = atoi(argv[++i]);
+		} else if (strcmp(arg, "--band") == 0 && i + 1 < argc) {
+			opt->band = atoi(argv[++i]);
 		} else if (strcmp(arg, "--raw") == 0 && i + 1 < argc) {
 			opt->raw_input = argv[++i];
 		} else if (strcmp(arg, "-t") == 0 && i + 1 < argc) {
@@ -265,14 +292,159 @@ static uint8_t *encode_frame(const struct options *opt, const uint8_t *rgba,
 	return out;
 }
 
+/*
+ * LZ4 band height.  `--band` wins; otherwise take the largest height that fits
+ * the device's band buffer *and divides the image*, because the band height is
+ * derived from the block count and the image height on the way back (in
+ * `s2img` and in the firmware's boot-logo walk), so uniform bands are the ones
+ * that stay readable.
+ */
+static int lz4_band_rows(const struct options *opt, int width, int height)
+{
+	int max_rows = (int)(LZ4_BAND_RAW_MAX / (2 * (size_t)width));
+	int rows;
+
+	if (opt->band > 0)
+		return opt->band;
+	if (max_rows < 1)
+		max_rows = 1;
+
+	for (rows = max_rows; rows > 1; rows--) {
+		if (height % rows == 0)
+			return rows;
+	}
+
+	return max_rows;
+}
+
+/*
+ * Encode one source image into the blocks the device consumes: a whole image
+ * for qoi/rle/jpeg, one band per block for LZ4 (`--band` rows, by default as
+ * many rows as the device's band buffer takes).
+ */
+static int encode_blocks(const struct options *opt, const uint8_t *rgba,
+			 int src_w, int src_h, int dst_w, int dst_h,
+			 struct blocks *out)
+{
+	int y, rows;
+	size_t capacity;
+
+	memset(out, 0, sizeof(*out));
+
+	if (opt->codec != PUD_CODEC_LZ4) {
+		out->data[0] = encode_frame(opt, rgba, src_w, src_h, dst_w, dst_h,
+					    &out->size[0]);
+		if (out->data[0] == NULL)
+			return -1;
+		out->count = 1;
+		return 0;
+	}
+
+	{
+		uint16_t *px = pud_rgba_to_rgb565_scaled(rgba, src_w, src_h,
+							 dst_w, dst_h);
+
+		if (px == NULL)
+			return -1;
+
+		rows = lz4_band_rows(opt, dst_w, dst_h);
+
+		capacity = pud_codec_max_size(opt->codec, dst_w, rows);
+		for (y = 0; y < dst_h; y += rows) {
+			int bh = dst_h - y < rows ? dst_h - y : rows;
+			uint8_t *buf;
+
+			if (out->count >= MAX_FRAMES) {
+				free(px);
+				return -1;
+			}
+			buf = malloc(capacity);
+			if (buf == NULL) {
+				free(px);
+				return -1;
+			}
+			out->size[out->count] = pud_codec_encode_rgb565(
+				opt->codec, px + (size_t)y * dst_w,
+				(size_t)bh * dst_w, buf, capacity);
+			if (out->size[out->count] == 0u) {
+				fprintf(stderr, "pudcodec: band at row %d failed\n", y);
+				free(buf);
+				free(px);
+				return -1;
+			}
+			out->data[out->count++] = buf;
+		}
+		free(px);
+	}
+
+	return 0;
+}
+
+static void blocks_free(struct blocks *b)
+{
+	int i;
+
+	for (i = 0; i < b->count; i++)
+		free(b->data[i]);
+	b->count = 0;
+}
+
+static size_t blocks_total(const struct blocks *b)
+{
+	size_t total = 0u;
+	int i;
+
+	for (i = 0; i < b->count; i++)
+		total += b->size[i];
+
+	return total;
+}
+
+/* [u32 count][u32 offsets[count+1]][blocks...], in memory.  The same layout
+ * pud_write_video_binary() writes, and the same one the firmware walks for the
+ * LZ4 boot logo. */
+static uint8_t *container_serialize(const struct blocks *b, size_t *size)
+{
+	size_t header = 4u + 4u * (size_t)(b->count + 1);
+	size_t total = header + blocks_total(b);
+	uint32_t count = (uint32_t)b->count;
+	uint32_t offset = (uint32_t)header;
+	uint8_t *buf = malloc(total);
+	uint8_t *p;
+	int i;
+
+	if (buf == NULL)
+		return NULL;
+
+	memcpy(buf, &count, sizeof count);
+	memcpy(buf + 4, &offset, sizeof offset);
+	for (i = 0; i < b->count; i++) {
+		offset += (uint32_t)b->size[i];
+		memcpy(buf + 8u + 4u * (size_t)i, &offset, sizeof offset);
+	}
+
+	p = buf + header;
+	for (i = 0; i < b->count; i++) {
+		memcpy(p, b->data[i], b->size[i]);
+		p += b->size[i];
+	}
+
+	*size = total;
+	return buf;
+}
+
 static int mode_img2s(struct options *opt)
 {
 	uint8_t *rgba;
 	uint8_t *stream;
+	uint8_t *container = NULL;
+	struct blocks blocks;
 	size_t stream_size = 0u;
+	size_t container_size = 0u;
 	size_t raw_size;
 	int img_w = 0, img_h = 0;
 	int out_w, out_h;
+	int band_count = 0;
 	char path_buf[512];
 	char name_buf[256];
 	const char *output = opt->output;
@@ -298,12 +470,15 @@ static int mode_img2s(struct options *opt)
 	out_w = opt->width > 0 ? opt->width : img_w;
 	out_h = opt->height > 0 ? opt->height : img_h;
 
-	stream = encode_frame(opt, rgba, img_w, img_h, out_w, out_h,
-			      &stream_size);
-	free(rgba);
-	if (stream == NULL)
+	if (encode_blocks(opt, rgba, img_w, img_h, out_w, out_h, &blocks) != 0) {
+		free(rgba);
 		return EXIT_FAILURE;
+	}
+	band_count = blocks.count;
+	free(rgba);
 
+	stream_size = blocks_total(&blocks);
+	stream = blocks.data[0];
 	raw_size = (size_t)out_w * (size_t)out_h * 2u;
 
 	if (output == NULL) {
@@ -325,7 +500,30 @@ static int mode_img2s(struct options *opt)
 		goto done;
 	}
 
-	if (want_header(opt)) {
+	if (opt->codec == PUD_CODEC_LZ4) {
+		/* Always a block container, even for a single band: that is the
+		 * one shape the device walks (see decoder_draw_bootlogo()), and
+		 * what `s2img` reads back. */
+		container = container_serialize(&blocks, &container_size);
+		if (container == NULL) {
+			fprintf(stderr, "pudcodec: out of memory\n");
+			goto done;
+		}
+		stream_size = container_size;
+		if (want_header(opt)) {
+			if (pud_write_codec_header(fp, pud_codec_name(opt->codec),
+						   array_name, opt->input, out_w,
+						   out_h, container,
+						   container_size, raw_size) != 0) {
+				fprintf(stderr, "pudcodec: header write failed\n");
+				goto done;
+			}
+		} else if (pud_write_binary(fp, container,
+					    container_size) != 0) {
+			fprintf(stderr, "pudcodec: container write failed\n");
+			goto done;
+		}
+	} else if (want_header(opt)) {
 		if (pud_write_codec_header(fp, pud_codec_name(opt->codec),
 					   array_name, opt->input, out_w, out_h,
 					   stream, stream_size, raw_size) != 0) {
@@ -342,13 +540,17 @@ static int mode_img2s(struct options *opt)
 done:
 	if (fp != NULL)
 		fclose(fp);
-	free(stream);
+	blocks_free(&blocks);
+	free(container);
 
 	printf("\n");
 	pud_print_size_comparison(pud_basename(opt->input), raw_size,
 				  stream_size);
 	printf("  dimensions  : %d x %d (%zu pixels, RGB565)\n", out_w, out_h,
 	       (size_t)out_w * (size_t)out_h);
+	if (opt->codec == PUD_CODEC_LZ4)
+		printf("  bands       : %d block(s), rows of %d\n",
+		       band_count, lz4_band_rows(opt, out_w, out_h));
 	printf("  decoder type: %d (PUD_CMD_GET_CAPS)\n",
 	       pud_codec_decoder_type(opt->codec));
 	printf("  output      : %s (%s)\n\n", output,
@@ -396,11 +598,11 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
 		return NULL;
 	}
 
-	/* A video header holds every frame; frame 0 is the one to decode, and
-	 * its length is a define of its own. */
-	declared = pud_parse_define(header_text, "_FRAME0_SIZE", -1);
+	/* A container header holds every block; block 0 is the one to decode,
+	 * and its length is a define of its own. */
+	declared = pud_parse_define(header_text, "_BLOCK0_SIZE", -1);
 	if (declared > 0)
-		printf("  note        : video header, decoding frame 0\n");
+		printf("  note        : block container, decoding block 0\n");
 	else
 		declared = pud_parse_define(header_text, "_SIZE", -1);
 	if (declared <= 0 || (size_t)declared > header_size)
@@ -419,6 +621,72 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
 	}
 
 	return stream;
+}
+
+/*
+ * LZ4 streams are block containers: one block per band, because an LZ4 block
+ * cannot be decoded in pieces.  Decode them all and put the bands back
+ * together into one RGB888 image.  The bands are uniform, so the row height
+ * follows from the block count and the image height.
+ */
+static uint8_t *lz4_decode_container(const uint8_t *blob, size_t size,
+				     int width, int height, int count,
+				     int *out_w, int *out_h)
+{
+	uint16_t *frame;
+	uint16_t *band;
+	int rows, y, i;
+	uint32_t offset;
+
+	if (blob == NULL || size < 8u || count <= 0 || width <= 0 ||
+	    height <= 0 || height % count != 0)
+		return NULL;
+
+	rows = height / count;
+	frame = malloc((size_t)width * (size_t)height * sizeof(*frame));
+	band = malloc((size_t)width * (size_t)rows * sizeof(*band));
+	if (frame == NULL || band == NULL) {
+		free(frame);
+		free(band);
+		return NULL;
+	}
+
+	offset = (uint32_t)(4u + 4u * (size_t)(count + 1));
+	for (y = 0, i = 0; i < count; i++) {
+		uint32_t start, end;
+		size_t got;
+
+		if (4u + 4u * (size_t)i + 8u > size)
+			break;
+		memcpy(&start, blob + 4u + 4u * (size_t)i, 4);
+		memcpy(&end, blob + 4u + 4u * (size_t)(i + 1), 4);
+		if (end < start || end > size)
+			break;
+
+		got = pud_codec_decode_rgb565(PUD_CODEC_LZ4, blob + start,
+					      end - start, band,
+					      (size_t)width * rows);
+		if (got != (size_t)width * (size_t)rows) {
+			fprintf(stderr, "pudcodec: lz4 band %d did not decode\n", i);
+			free(frame);
+			free(band);
+			return NULL;
+		}
+		memcpy(frame + (size_t)y * width, band,
+		       (size_t)width * rows * sizeof(*band));
+		y += rows;
+	}
+	(void)offset;
+	free(band);
+
+	if (y != height) {
+		free(frame);
+		return NULL;
+	}
+
+	*out_w = width;
+	*out_h = height;
+	return pud_rgb565_to_rgb888_buf(frame, (size_t)width * height);
 }
 
 static int mode_s2img(struct options *opt)
@@ -461,7 +729,24 @@ static int mode_s2img(struct options *opt)
 	if (stream == NULL)
 		return EXIT_FAILURE;
 
-	if (opt->codec == PUD_CODEC_JPEG) {
+	if (opt->codec == PUD_CODEC_LZ4) {
+		uint32_t blocks = 0u;
+
+		if (stream_size < 4u) {
+			free(stream);
+			return EXIT_FAILURE;
+		}
+		memcpy(&blocks, stream, 4);
+		rgb = lz4_decode_container(stream, stream_size, width, height,
+					   (int)blocks, &out_w, &out_h);
+		if (rgb == NULL) {
+			fprintf(stderr,
+				"pudcodec: not an LZ4 block container, or the "
+				"band geometry does not fit -w/-h\n");
+			free(stream);
+			return EXIT_FAILURE;
+		}
+	} else if (opt->codec == PUD_CODEC_JPEG) {
 		rgb = pud_jpeg_decode(stream, stream_size, &out_w, &out_h);
 		if (rgb == NULL) {
 			free(stream);
@@ -533,6 +818,7 @@ static int mode_video2s(struct options *opt)
 	size_t sizes[MAX_FRAMES];
 	size_t total_raw = 0u, total_encoded = 0u;
 	int count = 0;
+	int raw_frames = 0;
 	int width = opt->width, height = opt->height;
 	char path_buf[512];
 	char name_buf[256];
@@ -575,46 +861,90 @@ static int mode_video2s(struct options *opt)
 			return EXIT_FAILURE;
 		}
 
-		count = (int)(raw_size / frame_bytes);
-		if (count > MAX_FRAMES) {
+		raw_frames = (int)(raw_size / frame_bytes);
+		if (raw_frames > MAX_FRAMES) {
 			fprintf(stderr, "pudcodec: more than %d frames\n",
 				MAX_FRAMES);
 			free(raw);
 			return EXIT_FAILURE;
 		}
 
-		for (i = 0; i < count; i++) {
-			size_t capacity = pud_codec_max_size(opt->codec, width,
-							     height);
-			uint8_t *out = malloc(capacity);
+		for (i = 0; i < raw_frames; i++) {
+			const uint16_t *px =
+				(const uint16_t *)(raw + (size_t)i * frame_bytes);
 
-			if (out == NULL) {
-				free(raw);
-				goto done;
+			if (opt->codec == PUD_CODEC_LZ4) {
+				/* one block per band, like the image path */
+				int rows = lz4_band_rows(opt, width, height);
+				int y;
+
+				for (y = 0; y < height; y += rows) {
+					int bh = height - y < rows ? height - y : rows;
+					size_t capacity = pud_codec_max_size(
+						opt->codec, width, bh);
+					uint8_t *out = malloc(capacity);
+					size_t got;
+
+					if (out == NULL || count >= MAX_FRAMES) {
+						free(out);
+						free(raw);
+						goto done;
+					}
+					got = pud_codec_encode_rgb565(
+						opt->codec,
+						px + (size_t)y * width,
+						(size_t)bh * width, out, capacity);
+					if (got == 0u) {
+						fprintf(stderr,
+							"pudcodec: frame %d band %d failed\n",
+							i, y / rows);
+						free(out);
+						free(raw);
+						goto done;
+					}
+					frames[count] = out;
+					sizes[count] = got;
+					count++;
+					total_encoded += got;
+				}
+				total_raw += frame_bytes;
+				continue;
 			}
-			sizes[i] = pud_codec_encode_rgb565(
-				opt->codec,
-				(const uint16_t *)(raw +
-						   (size_t)i * frame_bytes),
-				(size_t)width * height, out, capacity);
-			if (sizes[i] == 0u) {
-				fprintf(stderr, "pudcodec: frame %d failed\n", i);
-				free(out);
-				free(raw);
-				goto done;
+
+			{
+				size_t capacity = pud_codec_max_size(opt->codec,
+								     width,
+								     height);
+				uint8_t *out = malloc(capacity);
+
+				if (out == NULL) {
+					free(raw);
+					goto done;
+				}
+				sizes[count] = pud_codec_encode_rgb565(
+					opt->codec, px, (size_t)width * height,
+					out, capacity);
+				if (sizes[count] == 0u) {
+					fprintf(stderr,
+						"pudcodec: frame %d failed\n", i);
+					free(out);
+					free(raw);
+					goto done;
+				}
+				frames[count] = out;
+				count++;
+				total_raw += frame_bytes;
+				total_encoded += sizes[count - 1];
 			}
-			frames[i] = out;
-			total_raw += frame_bytes;
-			total_encoded += sizes[i];
 		}
 		free(raw);
 	} else {
 		for (i = 0; i < opt->list_count; i++) {
 			int img_w = 0, img_h = 0;
+			struct blocks fb;
 			uint8_t *rgba =
 				pud_load_image(opt->list[i], &img_w, &img_h);
-			size_t size = 0u;
-			uint8_t *out;
+			int b;
 
 			if (rgba == NULL) {
 				fprintf(stderr, "pudcodec: cannot load '%s'\n",
@@ -626,17 +956,26 @@ static int mode_video2s(struct options *opt)
 			if (height <= 0)
 				height = img_h;
 
-			out = encode_frame(opt, rgba, img_w, img_h, width, height,
-					   &size);
-			free(rgba);
-			if (out == NULL)
+			if (encode_blocks(opt, rgba, img_w, img_h, width, height,
+					  &fb) != 0) {
+				free(rgba);
 				goto done;
+			}
+			free(rgba);
 
-			frames[count] = out;
-			sizes[count] = size;
-			count++;
+			/* LZ4 gives one block per band, so a frame contributes
+			 * several; the container stays flat either way. */
+			for (b = 0; b < fb.count; b++) {
+				if (count >= MAX_FRAMES) {
+					blocks_free(&fb);
+					goto done;
+				}
+				frames[count] = fb.data[b];
+				sizes[count] = fb.size[b];
+				count++;
+				total_encoded += fb.size[b];
+			}
 			total_raw += (size_t)width * (size_t)height * 2u;
-			total_encoded += size;
 		}
 
 		if (count == 0) {
@@ -671,8 +1010,12 @@ static int mode_video2s(struct options *opt)
 
 	if (want_header(opt)) {
 		if (pud_write_video_header(fp, pud_codec_name(opt->codec),
-					   base_name, width, height, frames,
-					   sizes, count, total_raw) != 0) {
+					   base_name,
+					   opt->codec == PUD_CODEC_LZ4
+						   ? "bands (LZ4 blocks)"
+						   : "frames",
+					   width, height, frames, sizes,
+					   count, total_raw) != 0) {
 			fprintf(stderr, "pudcodec: header write failed\n");
 			goto done;
 		}

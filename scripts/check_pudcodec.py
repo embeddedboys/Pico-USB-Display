@@ -14,7 +14,8 @@ Checks:
   3. s2img round trip    ==  the original pixels, exactly
   4. headers: codec tag, dimensions, auto detection, frame table
   5. jpeg: encode, then decode back through the tool
-  6. the boot logo arrays embedded in include/bootlogo.h
+  6. lz4: the band container, and the python encoder band for band
+  7. the boot logo arrays embedded in include/bootlogo.h
 """
 
 import re
@@ -134,7 +135,9 @@ def main():
         run("--codec", codec, "video2s", "--raw", raw, "-w", W, "-h", H,
             "-t", "bin", "-o", out)
         blob = out.read_bytes() if out.exists() else b""
-        ok, detail = container_ok(blob, 1)
+        # LZ4 bands a frame (one block per band); the others send one block
+        blocks = 1 if codec != "lz4" else H // 40
+        ok, detail = container_ok(blob, blocks)
         check("%s container" % codec, ok, detail)
         if encoder is not None and ok:
             frame0 = blob[struct.unpack_from("<I", blob, 4)[0]:]
@@ -181,8 +184,8 @@ def main():
     text = clip.read_text()
     sizes = [len(P.qoi_encode(pixels_of(f))) for f in frames]
     check("video header: count, frame 0 size, total",
-          "#define clip_FRAME_COUNT 3" in text and
-          "#define clip_FRAME0_SIZE %du" % sizes[0] in text and
+          "#define clip_BLOCK_COUNT 3" in text and
+          "#define clip_BLOCK0_SIZE %du" % sizes[0] in text and
           "#define clip_TOTAL_SIZE  %du" % sum(sizes) in text)
     one = tmp / "frame0.png"
     run("--codec", "auto", "s2img", clip, "-o", one)
@@ -204,8 +207,49 @@ def main():
     check("jpeg round trip", diff.max() <= 24 and diff.mean() < 3.0,
           "max %d LSB, mean %.2f LSB" % (diff.max(), diff.mean()))
 
-    print("6. the embedded boot logo arrays")
-    for codec in ("qoi", "rle"):
+    print("6. lz4: the band container")
+    banded = tmp / "photo.lz4.bin"
+    run("--codec", "lz4", "img2s", photo, "-w", W, "-h", H, "-t", "bin",
+        "-o", banded)
+    blob = banded.read_bytes()
+    bands = struct.unpack_from("<I", blob, 0)[0]
+    offsets = struct.unpack_from("<%dI" % (bands + 1), blob, 4)
+    check("container: %d bands, offsets sane" % bands,
+          bands == H // 40 and offsets[0] == 4 + 4 * (bands + 1) and
+          offsets[-1] == len(blob))
+    band_px = P.load_image(str(photo), W, H, fit=False)
+    banded_px = P.rgb888_to_rgb565(band_px, W, H)
+    limit = 2 * ((65535 - 16) // 3)
+    check("every band fits the device's band buffer (<= %d B raw)" % limit,
+          bands * 40 * W * 2 // bands <= limit)
+    try:
+        import lz4.block
+    except ImportError:
+        print("  %-52s SKIP (pip install lz4)" % "python encoder agrees per band")
+    else:
+        same = True
+        for i in range(bands):
+            rows = H // bands
+            raw = banded_px[i * rows * W * 2:(i + 1) * rows * W * 2]
+            want = lz4.block.compress(raw, store_size=False)
+            if blob[offsets[i]:offsets[i + 1]] != want:
+                same = False
+                break
+        check("python encoder agrees, band for band", same)
+    back = tmp / "photo.lz4.png"
+    run("--codec", "lz4", "s2img", banded, "-w", W, "-h", H, "-t", "png",
+        "-o", back)
+    check("container round trip is pixel exact",
+          repack(back) == banded_px)
+    one = tmp / "photo.lz4.h"
+    run("--codec", "lz4", "img2s", photo, "-n", "logo", "-t", "h", "-o", one)
+    text = one.read_text()
+    check("header carries the container and its codec",
+          '#define logo_CODEC  "lz4"' in text and
+          "#define logo_SIZE   %du" % len(blob) in text)
+
+    print("7. the embedded boot logo arrays")
+    for codec in ("qoi", "rle", "lz4"):
         out = tmp / ("bootlogo.%s.bin" % codec)
         run("--codec", codec, "img2s", photo, "-w", W, "-h", H, "-t", "bin",
             "-o", out)

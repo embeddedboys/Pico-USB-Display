@@ -75,6 +75,9 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
 | `g_decoder_stat_submitted` | USB 回调交给解码器的帧数 |
 | `g_decoder_stat_dropped` | 因无空闲帧槽被**丢弃**的帧数 |
 | `g_decoder_stat_drawn` | 已完成绘制的帧数 |
+| `g_decoder_stat_oversize` | 载荷装不进帧槽的帧数（控制阶段本该先拒掉） |
+| `g_decoder_stat_lz4_oversize` | LZ4 专有：band 比 `lz4_band[]` 大（主机分带太粗） |
+| `g_decoder_stat_lz4_bad` | LZ4 专有：解码长度 ≠ 窗口像素数（截断/损坏/窗口不符） |
 
 判定标准：
 

@@ -24,10 +24,12 @@ twenty times smaller and decodes the same formats. Nothing here needs numpy --
 without it the RGB565 conversion falls back to a plain python loop that still
 handles a 480x320 frame in a few tens of milliseconds.
 
-This module also carries the RGB565 QOI encoder. It is byte-for-byte
-identical to the C library shared by the firmware and the kernel driver
-(rgb565_qoi.c), so streams built here are exactly what the driver would send.
-Run `python3 pud_usb.py` to check that against a reference vector.
+This module also carries the RGB565 encoders for every codec the device can
+be built with: QOI and RLE are byte-for-byte identical to the C libraries the
+firmware and the kernel driver share (rgb565_qoi.c, rgb565_rle.c), and LZ4 is
+liblz4 itself -- the implementation the kernel links -- via `lz4.block`.  Run
+`python3 pud_usb.py` to check the two hand written ones against a reference
+vector.
 
 The device must not be bound to the pud kernel driver, since pyusb has to
 claim the interface. Install the bundled udev rule once to avoid needing root:
@@ -172,6 +174,29 @@ def rle_encode(pixels):
     return bytes(out)
 
 
+def lz4_encode(pixels):
+    """Compress RGB565 pixels (bytes or an iterable of ints) into an LZ4 block.
+
+    Unlike QOI and RLE there is no hand written encoder here: `lz4.block` is
+    the reference liblz4, i.e. the very implementation the kernel links, so a
+    stream built here is what the driver's LZ4_compress_default() produces.
+
+    `store_size=False` keeps it a bare LZ4 block -- the decompressed length is
+    implied by the transfer's window, not stored in the stream.  The device
+    decodes one *band* per transfer (an LZ4 block cannot be decoded in pieces),
+    so callers band first; `Display.send_rgb565()` does that for you.
+    """
+    try:
+        import lz4.block
+    except ImportError:
+        raise PudError("the lz4 package is required: pip install lz4")
+
+    if not isinstance(pixels, (bytes, bytearray, memoryview)):
+        pixels = struct.pack("<%dH" % len(pixels), *pixels)
+
+    return lz4.block.compress(bytes(pixels), store_size=False)
+
+
 def qoi_encode(pixels):
     """Compress RGB565 pixels (bytes or an iterable of ints) into a QOI stream.
 
@@ -245,6 +270,15 @@ def qoi_encode(pixels):
 
     out += _QOI_PADDING
     return bytes(out)
+
+
+#: The encoders a host may send with.  The device has to be built for the same
+#: one (DECODER_TYPE); `Display.query_caps()` asks which.
+ENCODERS = {
+    "qoi": qoi_encode,
+    "rle": rle_encode,
+    "lz4": lz4_encode,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -554,11 +588,27 @@ class Display:
         self.dev.write(EP1_OUT_ADDR, payload, timeout=timeout)
         return len(payload), time.perf_counter() - t0
 
-    def send_rgb565(self, rgb565, width, height, xs=0, ys=0, timeout=None):
+    def send_rgb565(self, rgb565, width, height, xs=0, ys=0, timeout=None,
+                    codec="qoi"):
         """Send a rectangle of RGB565 pixels, banding it if needed.
+
+        The rectangle is split into horizontal bands of at most `band_pixels`
+        pixels (what the device reports through PUD_CMD_GET_CAPS), and each band
+        goes as one self-contained stream -- which is what the device's decoder
+        expects, for every codec:
+
+          qoi / rle   the band is one QOI/RLE image
+          lz4         the band is one LZ4 block; an LZ4 block cannot be decoded
+                      in pieces, so the device holds exactly one band at a time
 
         Returns (bands, payload_bytes, seconds).
         """
+        try:
+            encode = ENCODERS[codec]
+        except KeyError:
+            raise PudError("unknown codec %r (have: %s)"
+                           % (codec, ", ".join(sorted(ENCODERS))))
+
         timeout = timeout or DEFAULT_TIMEOUT_MS
         self._check_rect(xs, ys, xs + width - 1, ys + height - 1)
         rows = max(1, self.band_pixels // width)
@@ -571,7 +621,7 @@ class Display:
             bh = min(rows, height - y)
             start = y * width * 2
             band = rgb565[start:start + bh * width * 2]
-            payload = qoi_encode(band)
+            payload = encode(band)
             if len(payload) > limit:
                 raise PudError("band of %d bytes exceeds the %d byte limit"
                                % (len(payload), limit))
@@ -657,6 +707,16 @@ def _selftest():
     print("pud_usb self-test OK")
     print("  QOI encoder matches the C library reference vector")
     print("  RLE encoder matches the C library reference vector")
+    try:
+        import lz4.block
+    except ImportError:
+        print("  LZ4 encoder skipped (pip install lz4)")
+    else:
+        blob = lz4_encode(_REFERENCE_PIXELS)
+        if lz4.block.decompress(blob, uncompressed_size=16) != \
+                struct.pack("<8H", *_REFERENCE_PIXELS):
+            raise PudError("LZ4 encoder does not round trip")
+        print("  LZ4 encoder round trips (liblz4, via the lz4 package)")
     print("  band limit %d pixels, %d bytes per transfer"
           % (PUD_MAX_BAND_PIXELS, USB_TRANS_MAX_SIZE))
     try:
