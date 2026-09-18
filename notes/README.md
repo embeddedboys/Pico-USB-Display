@@ -14,6 +14,7 @@
 | [debugging.md](debugging.md) | gdb/OpenOCD 调试、HardFault 定位、解码统计计数器 |
 | [scripts.md](scripts.md) | 用户空间工具：共享模块、依赖选型、各脚本用法与实测带宽 |
 | [pitfalls.md](pitfalls.md) | 踩坑合集：ISR 里解码、PIO/DMA 卡死、RAM 预算、bootlogo 数组 |
+| [todo.md](todo.md) | **待办**：未结案的问题、RP2040 bring-up、已知待修项 |
 
 ## 相关仓库
 
