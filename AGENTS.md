@@ -134,8 +134,8 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**（载荷少 15~35%，三者都跑在
   1.0~1.1 MB/s 的链路极限上）；LZ4 的优势在内核侧（不用 vendor 编码器），不是性能
   （见 [notes/decoders.md](notes/decoders.md)）。**给设备计时必须把编码放在循环外**，
-  否则量的是 Python 编码器而不是解码器。小矩形连发会把板子 USB 打挂，脚本默认留 3 ms
-  间隔，见 [notes/todo.md](notes/todo.md)。
+  否则量的是 Python 编码器而不是解码器。无间隔连发小矩形**不会**打挂板子（2026-09
+  无调试器复测，见 [notes/todo.md](notes/todo.md) 第 8 条），脚本 `--gap-ms` 默认 0。
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被
   `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。

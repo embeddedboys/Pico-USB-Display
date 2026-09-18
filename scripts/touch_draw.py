@@ -137,10 +137,9 @@ def main():
                          "arriving faster are coalesced into the next update")
     ap.add_argument("--verbose", action="store_true",
                     help="print every report as it is drawn (for logging)")
-    ap.add_argument("--gap-ms", type=float, default=2.0,
-                    help="pause between panel updates (default 2 ms): this "
-                         "board's USB hangs under a tight loop of small "
-                         "transfers, see notes/todo.md")
+    ap.add_argument("--gap-ms", type=float, default=0.0,
+                    help="pause between panel updates (default 0): the link "
+                         "was measured to survive back-to-back small transfers")
     args = ap.parse_args()
 
     from PIL import ImageDraw
@@ -150,10 +149,10 @@ def main():
     misses = 0
     last = None
 
-    # A touch report arrives every 33 ms, but the link moves ~1.1 MB/s and this
-    # board hangs if small transfers are pushed back to back, so panel updates
-    # are rate limited and the dirty rectangle is coalesced: the canvas always
-    # has the newest marks, only the transfer is deferred.
+    # A touch report arrives every 33 ms (30/s), which is faster than a panel
+    # update on this link, so updates are rate limited and the dirty rectangle
+    # is coalesced: the canvas always has the newest marks, only the transfer
+    # is deferred.
     interval = 1.0 / max(1.0, args.rate)
     pending = {"box": None, "last": 0.0}
 

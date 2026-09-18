@@ -277,9 +277,9 @@ def main():
     ap.add_argument("--workdir", default=None,
                     help="where to write the generated workload (default: a "
                          "temporary directory)")
-    ap.add_argument("--gap-ms", type=float, default=3.0,
-                    help="pause between transfers (the board's USB hangs "
-                         "under a tight loop of small ones)")
+    ap.add_argument("--gap-ms", type=float, default=0.0,
+                    help="pause between transfers (default 0: a tight loop of "
+                         "small ones was measured not to break anything)")
     args = ap.parse_args()
 
     import tempfile

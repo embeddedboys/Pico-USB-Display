@@ -136,6 +136,59 @@ r2 = <TFT 数据指针>
 **排查经验**：`CFSR` 的 `STKERR`/`MSTKERR` 基本可以直接判定为"某处栈不够"，
 优先怀疑在中断/小栈上下文里做了重活（解码、大数组、printf）。
 
+### 判断"到底有没有出过故障"（无调试器排查用）
+
+`HFSR`(0xE000ED2C) / `CFSR`(0xE000ED28) / `BFAR`(0xE000ED38) 都是**粘滞**的：出过故障就一直
+置位，直到复位或手工清。所以**复位后跑一段负载，再读这三个寄存器**就能判断这段负载有没有
+触发故障，不需要一直挂着调试器（挂调试器本身会干扰 USB 传输）：
+
+```gdb
+x/1xw 0xE000ED28     # CFSR
+x/1xw 0xE000ED2C     # HFSR
+x/1xw 0xE000ED38     # BFAR（CFSR.BFARVALID 有效时才是故障地址）
+print/x $pc
+```
+
+两个坑：
+
+- `isr_hardfault` 在本工程里是 pico-sdk 的**默认 stub**（`decl_isr_bkpt`），和
+  `isr_svcall` / `isr_pendsv` **同一个地址**。所以 `info symbol $pc` / `bt` 会把停在
+  HardFault 的核显示成 `isr_svcall` 之类 —— 别被名字骗了，**看寄存器**。
+- 出了 HardFault 的核会停在那条 `bkpt` 上，**不会自己恢复**；不用 `monitor reset run`
+  复位的话，主机侧看到的就是"设备不响应"。
+
+### 一次未定因的 HardFault（2026-09，怀疑是调试会话引起的）
+
+排查"小矩形连发"时发现的现场（见 [todo.md](todo.md) 第 8 条），无调试器时复现不出来：
+
+```
+CFSR  = 0x8200     → PRECISERR + BFARVALID：一次精确的数据访问错，BFAR 有效
+HFSR  = 0x40000000 → FORCED：由可配置故障升级上来
+BFAR  = 0x130476dc → 出错的数据地址
+异常帧 LR = 0xfffffffd → 故障发生在**线程模式、用 PSP**，所以 PSP 上就是故障帧
+PSP   = 0x20037c40
+  帧内容: R0=0  R1=1  R2=0  R3=0x130476dc  R12=0x12121212
+          LR=0x100079ef  PC=0x20011338  xPSR=0x41000000
+pxCurrentTCBs[0] = "IDLE0"，pxStack = 0x20037880（256 words）
+```
+
+逐条读出来的东西：
+
+- 出错的任务是 **core0 的 idle task**；`PSP − pxStack = 0x3c0`，栈顶在 0x20037c80，也就是说
+  只用掉 16 个字 —— **不是栈溢出**。
+- `info symbol 0x20011338` → `g_usbd_core+664`（在 `.noncacheable` 里），而 **那个字里存的
+  是端点回调 `usbd_vendor_ep2_bulk_in`**。也就是说 PC 落在了一个**函数指针槽的地址**上，
+  不是函数本身：控制流被引到了数据区。
+- 把 `0x20011338` 处的两个字当代码读：半字 `0x801d` = `strh r5, [r3]`，而 `r3 = BFAR =
+  0x130476dc` —— 和"精确存储错误"完全对上。即 CPU 从数据里开始取指，第一条就野写。
+
+**未定因**：无调试器下 3000/6000 × 32×32、150/300 帧桌面负载（都是 `--gap-ms 0`）跑完
+`CFSR`/`HFSR` 都是 0，所以最可能是那次排查时**反复停机/写内存的调试会话**造成的。当时用的
+`force_touch.gdb` 在断点命令里 `return <常量>` 强改 `ft6236_*` 的返回值（等于替目标改 PC 和栈），
+而且有几个 gdb 会话是被 `timeout` 杀掉的（gdb 被杀会把核留在停机状态）—— 这两件事都足以把核
+带到不一致的状态，是当前最可疑的来源。**存疑，未验证**；再遇到时按上面的步骤先抓 PSP 帧和
+`g_usbd_core` 里那组回调指针，看是哪一个槽被改了。
+
 ## 任务栈水位与栈保护
 
 任务栈在建栈时被内核填成 `0xa5`（`tskSET_NEW_STACKS_TO_KNOWN_VALUE`，本工程因为
