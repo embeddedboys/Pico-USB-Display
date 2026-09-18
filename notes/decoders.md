@@ -6,10 +6,14 @@
 
 | 值 | 名称 | 输入格式 | 状态 |
 | --- | --- | --- | --- |
-| 0 | tjpgd | JPEG | **未实现**（`decoder.h` 里直接 `#error`） |
+| 0 | — | — | **保留槽位**：tjpgd 从未实现（`decoder.h` 里 `#error`）。编号不能改，它要上报给主机 |
 | 1 | JPEGDEC | JPEG | 可用，但局部刷新有已知缺陷（见下） |
 | 2 | LZ4 | LZ4 | 可用 |
 | 3 | **QOI** | RGB565 QOI | **当前使用** |
+
+> **JPEG 只有 JPEGDEC 一种实现**（`src/decoders/jpegdec/`，没有再引入第二份）。
+> 0 号槽位的 tjpgd 计划过但从未落地，源码里连一份都没有；槽位保留是因为
+> `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机，改编号等于改协议。
 
 `include/decoder.h` 用一个宏做分发：
 
@@ -17,7 +21,7 @@
 #define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
 ```
 
-调试日志里的名字来自 `decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" }`，
+调试日志里的名字来自 `decoder_names[] = { "(unused)", "JPEGDEC", "LZ4", "QOI" }`，
 开机打印 `Decoder type: QOI`。
 
 > **坑**：这个数组曾漏掉 `"QOI"` 这一项，而 `DECODER_TYPE=3` 会越界读。

@@ -138,7 +138,7 @@ struct pud_caps {
     u32 magic;          /* PUD_CAPS_MAGIC = 0x43445550 ("PUDC") */
     u32 proto_ver;      /* PUD_PROTO_VER = 1 */
     u32 frame_max;      /* 单次 EP1 传输上限：RP2350 65536，RP2040 32768 */
-    u32 decoder_type;   /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI */
+    u32 decoder_type;   /* 0 保留, 1 JPEGDEC, 2 LZ4, 3 QOI */
 };
 ```
 

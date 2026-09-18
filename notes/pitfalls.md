@@ -335,10 +335,11 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 ### 4.2 `decoder_names[]` 必须包含所有类型
 
 ```c
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
+static char *decoder_names[] = { "(unused)", "JPEGDEC", "LZ4", "QOI" };
 ```
 
-这个数组曾漏掉 `"QOI"`，而 `DECODER_TYPE=3` 会越界读。加解码器时同步这里。
+这个数组曾漏掉 `"QOI"`，而 `DECODER_TYPE=3` 会越界读。加解码器时同步这里；
+0 号槽位（tjpgd 从未实现）**不要删**，否则后面几个编号全体前移。
 
 ### 4.3 `include/bootlogo.h` 是个超大的条件编译文件
 

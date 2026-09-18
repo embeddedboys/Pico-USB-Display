@@ -39,76 +39,6 @@
 uint16_t decoder_xs, decoder_ys;
 uint16_t decoder_xe, decoder_ye;
 
-/* for TJPGD lib */
-// uint8_t workspace[TJPGD_WORKSPACE_SIZE] __attribute__((aligned(4)));
-
-// unsigned int jd_input(JDEC* jdec, uint8_t* buf, unsigned int len)
-// {
-// 	struct tjpgd_data *tjpgd = &g_udd_data.tjpgd;
-
-// 	memcpy(buf, (const uint8_t *)(tjpgd->array_data + tjpgd->array_index), len);
-// 	tjpgd->array_index += len;
-
-// 	return len;
-// }
-
-// int jd_output(JDEC* jdec, void* bitmap, JRECT* jrect)
-// {
-// 	struct tjpgd_data *tjpgd = &g_udd_data.tjpgd;
-
-// 	int16_t  x = jrect->left + tjpgd->jpeg_x;
-// 	int16_t  y = jrect->top  + tjpgd->jpeg_y;
-// 	uint16_t w = jrect->right  - jrect->left;
-// 	uint16_t h = jrect->bottom - jrect->top;
-
-// 	// pr_debug("%d, %d, %d, %d\n", jrect->top, jrect->left, jrect->bottom, jrect->right);
-// 	// pr_debug("%d, %d, %d, %d\n", x, y, w, h);
-
-// 	ili9488_video_flush(x, y, x + w, y + h, (uint16_t *)bitmap, (w + 1) * (h + 1));
-// }
-
-// JRESULT jd_getsize(uint16_t *w, uint16_t *h, const uint8_t jpeg_data[], uint32_t  data_size)
-// {
-// 	struct tjpgd_data *tjpgd = &g_udd_data.tjpgd;
-// 	JRESULT jresult = JDR_OK;
-// 	JDEC jdec;
-
-// 	tjpgd->array_index = 0;
-// 	tjpgd->array_data  = jpeg_data;
-// 	tjpgd->array_size  = data_size;
-
-// 	jresult =  jd_prepare(&jdec, jd_input, workspace, TJPGD_WORKSPACE_SIZE, 0);
-// 	if (jresult == JDR_OK) {
-// 		*w = jdec.width;
-// 		*h = jdec.height;
-// 	}
-
-// 	return jresult;
-// }
-
-// JRESULT jd_drawimg(int32_t x, int32_t y, const uint8_t jpeg_data[], uint32_t  data_size)
-// {
-// 	struct tjpgd_data *tjpgd = &g_udd_data.tjpgd;
-// 	JRESULT jresult = JDR_OK;
-// 	JDEC jdec;
-
-// 	tjpgd->array_index = 0;
-// 	tjpgd->array_data  = jpeg_data;
-// 	tjpgd->array_size  = data_size;
-
-// 	tjpgd->jpeg_x = x;
-// 	tjpgd->jpeg_y = y;
-
-// 	jdec.swap = false;
-
-// 	jresult = jd_prepare(&jdec, jd_input, workspace, TJPGD_WORKSPACE_SIZE, 0);
-// 	if (jresult == JDR_OK) {
-// 		jresult = jd_decomp(&jdec, jd_output, 0);
-// 	}
-
-// 	return jresult;
-// }
-
 struct jpegdec_data {
 	JPEGIMAGE img;
 	u8 options;
@@ -413,7 +343,10 @@ static void decoder_task(void *param)
 	}
 }
 
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
+/* Indexed by DECODER_TYPE.  Slot 0 is unused -- tjpgd was never implemented --
+ * but it is kept so the other numbers do not shift: the device reports this
+ * value to the host through PUD_CMD_GET_CAPS. */
+static char *decoder_names[] = { "(unused)", "JPEGDEC", "LZ4", "QOI" };
 
 void decoder_init(void)
 {

@@ -141,7 +141,7 @@ USB 初始化并行，和改前一致。改后单次传输 5.00 ms、`dropped=0`
 | `main.c` | 时钟/串口初始化、任务创建 |
 | `src/pud.c` | 设备抽象层：初始化序列、命令读写宏（`pud_get_ro_*` / `pud_set_rw_*`） |
 | `src/cherryusb/` | USB 设备栈接入：描述符、厂商请求处理、端点回调 |
-| `src/decoders/` | 解码器抽象与各实现（tjpgd / JPEGDEC / LZ4 / QOI） |
+| `src/decoders/` | 解码器抽象与各实现（JPEGDEC / LZ4 / QOI；0 号槽位保留） |
 | `include/pud.h` / `include/decoder.h` | 对外接口与类型 |
 | `include/bootlogo.h` | 按 `DECODER_TYPE` 分支的开机 logo 压缩数据 |
 | `lib/` | 子模块：Pico SDK 之外的依赖 |

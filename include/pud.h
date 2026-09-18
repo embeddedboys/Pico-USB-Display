@@ -52,7 +52,7 @@ struct pud_caps {
 	u32	magic;
 	u32	proto_ver;
 	u32	frame_max;	/* max bytes the device accepts in one EP1 transfer */
-	u32	decoder_type;	/* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI */
+	u32	decoder_type;	/* 0 reserved, 1 JPEGDEC, 2 LZ4, 3 QOI */
 };
 
 struct disp_data {
@@ -69,14 +69,6 @@ struct tp_data {
 	u16	x;
 	u16	y;
 	u8	polling_period;
-};
-
-struct tjpgd_data {
-	const u8	*array_data;
-	u32		array_index;
-	u32		array_size;
-	s16		jpeg_x;
-	s16		jpeg_y;
 };
 
 struct jpegdec_data {
