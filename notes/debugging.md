@@ -51,6 +51,19 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
   -ex "monitor reset run" -ex "detach" -ex "quit"
 ```
 
+**复位后主机可能认不回设备**（`lsusb` 里没有 `2e8a:0001`，pyusb 找不到）。现象是
+固件其实在正常跑，但 `usb_task` 一直停在"等枚举"上。原因多半是主机没看见一次干净的
+断开：**复位前先 halt 住停一会儿**即可（实测 2 秒足够）：
+
+```bash
+gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
+  -ex "monitor reset halt" -ex "shell sleep 2" \
+  -ex "monitor reset run" -ex "detach" -ex "quit"
+```
+
+> 走断点调试（`monitor reset halt` → 断点 → `continue`）之后再 `reset run`，
+> 最容易踩到这个；最稳的是直接重烧一次。
+
 ## 解码流水线诊断
 
 ### 计数器
@@ -115,10 +128,56 @@ r2 = <TFT 数据指针>
 ```
 
 根因：在 **USB 中断回调里直接解码**，JPEGDEC 吃栈远超中断栈容量 → 压栈失败。
-修法：中断里只 `decoder_submit_frame()` 搬运，解码交给 `decoder_task`（栈 4096 words）。
+修法：中断里只 `decoder_submit_frame()` 搬运，解码交给 `decoder_task`（栈 1024 words / 4 KB）。
 
 **排查经验**：`CFSR` 的 `STKERR`/`MSTKERR` 基本可以直接判定为"某处栈不够"，
 优先怀疑在中断/小栈上下文里做了重活（解码、大数组、printf）。
+
+## 任务栈水位与栈保护
+
+任务栈在建栈时被内核填成 `0xa5`（`tskSET_NEW_STACKS_TO_KNOWN_VALUE`，本工程因为
+`configUSE_TRACE_FACILITY 1` 而生效），所以**从 `pxStack` 往上数连续的 `0xa5` 就是没用过的部分**，
+峰值 = 栈深 − 这段长度。全程只读内存，不用改固件，也不用调 `uxTaskGetStackHighWaterMark()`。
+
+做法：`monitor halt` 后，用 gdb 的 Python 遍历 FreeRTOS 任务链表
+（`pxReadyTasksLists[]`、`pxDelayedTaskList`、`pxOverflowDelayedTaskList`、
+`xPendingReadyList`、`xSuspendedTaskList`，取每个 `ListItem_t` 的 `pvOwner`），
+再按各 TCB 的 `pxStack` 扫内存。坑：
+
+- `configRECORD_STACK_HIGH_ADDRESS 0` → TCB 里**没有** `pxEndOfStack`，栈深得自己从创建点带进去。
+- 实测峰值（当前声明值）：`decoder_task` 496 B / 4 KB —— **空转和满载全屏解码一模一样**，
+  整条 QOI 路径（含开机 logo 那一帧）峰值 ≤ 496 B；切到 `DECODER_TYPE=1` 实测
+  **JPEGDEC 整帧 480×320 是 632 B**（这就是 4096 words 缩到 1024 的依据）；
+  `usb_task` 416 B / 1 KB、`indev_read` 432 B / 1 KB、`Tmr Svc` 152 B / 1 KB、
+  idle 112~128 B / 1 KB。
+- 要量某个 `DECODER_TYPE` 的路径，把 `CMakeLists.txt` 里的 `DECODER_TYPE` 改过去重烧即可 ——
+  开机的 logo 正好是按该类型编码的**整屏图**，所以不用主机脚本就能把整条解码路径跑一遍
+  （用 `g_bl_priv.bl_lvl == 100` 判断它真的画完了）。
+- 想确认某条路径（比如 `printf`）有没有真的进过某个栈：把该栈已用部分的字当返回地址，
+  拿 `arm-none-eabi-nm` 的符号表反查。`indev_read` 的栈上能查到
+  `_vsnprintf` / `stdio_buffered_printer`，说明 `printf` 的开销已经算在峰值里了。
+- 已删除的任务也能量（`bootlogo_task` 曾经就是这种，现在已经并进 `decoder_task`）：
+  `heap_3` 下 `free()` 只覆盖块首 8 字节，栈里的 `0xa5` 边界还在。TCB 偏移是
+  `pxStack@+52`、`pcTaskName@+64`（`ptype /o TCB_t` 可查），用 RAM 里残留的任务名字符串
+  反推出 TCB，再读 `pxStack`。判断任务是否真的没了，还可以看 heap 布局：
+  删掉一个任务后，后面任务的 `pxStack` 会整体前移一个 TCB + 栈的距离。
+
+### 栈溢出会不会静默踩内存
+
+**任务栈不会，中断栈会。**
+
+- **任务栈**：端口 `portHAS_STACK_OVERFLOW_CHECKING 1`，建栈时把 `pxStack` 存进上下文的
+  PSPLIM 槽，每次切换 `portasm.c` 都 `msr psplim`，越界就是 UsageFault（STKOF）→ HardFault，
+  **fail-stop**。验证方法 —— 任意 TCB 的 `pxTopOfStack` 指向的第一个字应等于它的 `pxStack`：
+  ```gdb
+  print/x *(unsigned int *)pxCurrentTCBs[0]->pxTopOfStack   # == pxCurrentTCBs[0]->pxStack
+  ```
+  所以 `configCHECK_FOR_STACK_OVERFLOW 0` 在这个端口上可以接受，代价只是溢出表现为卡死，
+  没有 `vApplicationStackOverflowHook` 能报告。
+- **中断栈（MSP）**：`__StackBottom`~`__StackTop` 每核 **2 KB**（`StackSize = 0x800`，
+  core 1 用 `__StackOne*`），下面紧挨着 core 1 的栈 / BSS / 堆顶（`__HeapLimit = 0x20080000`）。
+  portasm 里搜不到 `msplim`，CMake 也没开 `PICO_USE_STACK_GUARDS` —— **溢出不会立刻 fault**。
+  这就是"解码只能在 `decoder_task` 里做"这条规矩的由来。
 
 ## 串口日志
 
@@ -169,6 +228,42 @@ sudo rmmod pud
 - **`min`** —— 最快的一帧。此时设备空闲（两个帧槽都是空的），所以它≈**纯 USB 传输**上限。
 - **`median`** —— 稳态周期。`median / min` 比值大说明**瓶颈在设备侧**（解码/刷屏）；
   接近 1 说明**瓶颈在 USB 带宽**。
+
+> **跨版本比较必须带用例标签。** 两个 full 用例的地板差一倍以上：
+> `(单次传输)` 整帧一次发完（纯色 min ≈ 2.6 ms），而分带用例要 8 段、每段一次往返
+> （纯色 min 就已经 ≈ 5.7 ms，`steady/min ≈ 1.04`，判定"USB 受限"）。
+> 也就是说 **5.06 ms 这种数字只可能出自 `(单次传输)`**，拿它跟分带的 5.9 ms 比会得出
+> 完全错误的结论。历史优化链（36.27 → 8.00 → 5.63 → 5.06 ms）用的都是
+> `full/solid（单次传输）`。
+
+> 主机的 USB 会话本身也会漂：同一版固件在不同时间测，`min` 与稳态会一起上下浮动
+> 0.1~0.4 ms（设备今天被反复复位/重枚举）。**要判定"改动有没有影响性能"，必须
+> A/B 交替烧写、各测多次看是否稳定分离**，不要跨时间比单次数字。
+
+### 一个未结案的偏差：bootlogo 并进 `decoder_task` 后 +5.6%
+
+A/B 交替烧写（同一主机、同一脚本、各 2 次，`full/solid（单次传输）`，都稳到 ±0.02 ms）：
+
+| 固件 | 每帧 |
+| --- | --- |
+| HEAD（logo 由独立 `bootlogo_task` 画） | 5.20 / 5.23 ms |
+| 工作区（logo 画在 `decoder_task` 里） | 5.50 / 5.52 ms |
+
+**已用单变量实验排除**（每项都各测 2~3 次）：
+
+- 解码/刷屏指令序列 —— 归一化反汇编（去掉地址）后 `qoi_flush`、
+  `rgb565_qoi_decompress_callback` **逐条相同**；
+- `EP1_RD_BUF_SIZE` 64 KB ↔ 128 KB —— 都是 5.50 ms（所以那次 64 KB 的 .bss 平移不是原因）；
+- `decoder_task` 栈 1024 ↔ 4096 words —— 都是 5.50 ms（**栈收缩本身性能中性**）；
+- `DECODER_STATS` 0/1、核分配（两种都在 core 1）。
+
+**剩余嫌疑**：bootlogo 重构本身（连同被删掉的 `decoder_mutex`）—— 稳态下它唯一留下的
+差别是每个 `decoder_drawimg` 少了两次 mutex 进出。影响面只限"整屏单次传输"这一档
+（设备侧受限）；局刷与 DRM damage 那几档是 USB 受限，不受影响。
+
+处置：该重构与 RP2040 那三项改动（协议校验、按板分缓冲、能力查询）**互相独立**，
+可以单独回退换回这 5.6%。**未结案，别当成已解决。**
+
 
 编码器与固件/驱动共用的 `rgb565_qoi.c` **逐字节一致**（已用 solid/gradient/noise/run
 四类图案对照 C 输出验证），所以这里量到的字节数就是驱动实际会发的字节数。

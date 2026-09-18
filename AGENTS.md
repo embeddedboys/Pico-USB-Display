@@ -48,14 +48,23 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 
 1. **解码只能在 `decoder_task` 里做。** 在 `usbd_vendor_ep1_bulk_out()`
    （USB 中断上下文）里解码会因中断栈不足 HardFault（`CFSR` 的 `STKERR`），
-   并且会长时间阻塞 USB 中断。`decoder_task` 栈 4096 words，不要减。
+   并且会长时间阻塞 USB 中断。`decoder_task` 栈 **1024 words（4 KB）**：
+   整条解码路径的实测峰值是 JPEGDEC 632 B / QOI 496 B（用 `0xa5` 填充反推，
+   见 [notes/debugging.md](notes/debugging.md)），4 KB 已有约 6 倍余量。
+   这条是**实测**结论，别再凭"JPEGDEC 吃栈"的猜测往上加 —— 它的上下文在
+   `.bss`（`&g_jpegdec`），回调只有标量局部。要加之前先测。
 2. **EP1 流控必须保留。** 帧槽全忙时**故意不武装 EP1**，让主机的 bulk 传输
    阻塞等待（`usbd_vendor_ep1_defer()` / `usbd_vendor_ep1_tick()`）。
    判定标准：`g_decoder_stat_dropped == 0`，且 `drawn` 落后 `submitted` 恰好 1 帧。
    去掉它 = 槽满静默丢帧 = 局部刷新残影。
-3. **RAM 很紧。** 512 KB SRAM 中 `ep1_read_buffer`（128 KB）+
-   `s_frames`（2 × 64 KB）就占了一半。**不要把 `DECODER_FRAME_SLOTS` 或
-   `DECODER_FRAME_MAX` 翻倍**（2 × 128 KB 会溢出）。
+3. **RAM 很紧。** RP2350 512 KB SRAM 里 `ep1_read_buffer`（64 KB）+
+   `s_frames`（2 × 64 KB）已经占掉一大块；**RP2040 只有 256 KB 可用**，
+   所以这两个尺寸**都不是写死的，由 `PUD_MAX_TRANSFER` 按板子决定**
+   （`src/cherryusb/usbd_vendor.h`，RP2350 64 KB / RP2040 32 KB），
+   帧槽在 `decoder.c` 里用同一个宏并有 `_Static_assert` 兜底。
+   改它 = 改协议，主机靠 `PUD_CMD_GET_CAPS` 问设备（见"架构不变量"第 6 条）。
+   **不要把 `DECODER_FRAME_SLOTS` 或 `PUD_MAX_TRANSFER` 翻倍**
+   （RP2040 上实测 128 KB + 2×64 KB 时 .data/.bss 达到 RAM 的 109%，直接链接失败）。
 4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
    它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
 5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读）。

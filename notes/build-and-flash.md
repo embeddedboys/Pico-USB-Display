@@ -118,7 +118,7 @@ set(INDEV_DRV_USE_FT6236 1)  # 触摸控制器
 ```
 
 **改了分辨率要同步检查**：
-1. 驱动侧的分带尺寸（`PUD_MAX_BAND_PIXELS`）与 `tx_buf` 大小
+1. 驱动侧的分带尺寸（`pud->max_band_pixels`，由 `PUD_CMD_GET_CAPS` 从设备得到）与 `tx_buf` 大小
 2. 固件的 QOI 缓冲尺寸（`qoi_buf_a/b[480 * QOI_BUF_ROWS]` 里的 480 是硬编码上限）
 3. `include/bootlogo.h` 里的 logo 数据是按分辨率编好的
 

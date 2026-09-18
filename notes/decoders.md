@@ -36,11 +36,10 @@ decoder_submit_frame(xs, ys, xe, ye, ep1_read_buffer, nbytes)
    │  找一个空闲帧槽，memcpy 进去，give 信号量
    │  （满了就丢帧并计数 —— 但流控已使这不再发生）
    ▼
-decoder_task()  ← 独立任务，栈 4096 words
+decoder_task()  ← 独立任务，栈 1024 words（4 KB）
+   │  （开机时先在这里画一次 logo，然后才进循环）
    │  take 信号量 → 找到 busy 槽
-   │  mutex_enter_blocking(&decoder_mutex)
    │  decoder_drawimg(...)   ← 真正解码 + 刷 TFT
-   │  mutex_exit()
    │  槽置空闲 → usbd_vendor_ep1_tick()  ← 补发被延迟的 EP1 武装
    ▼
 TFT
@@ -165,7 +164,7 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 而不是跨行的散点 —— 对 TFT 的窗口设置更友好。
 
 **两级 ping-pong**：库内部在第一/第二缓冲间切换（一个被回调消费时另一个继续填），
-加上调用前的 `decoder_mutex`，让刷屏与解码尽量重叠。
+让刷屏与解码尽量重叠。
 
 ### 为什么从 JPEG 换成 QOI
 
