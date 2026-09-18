@@ -113,7 +113,7 @@ size_t pud_codec_max_size(int codec, int width, int height)
 uint16_t pud_rgb888_to_rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
 	return (uint16_t)(((uint16_t)(r & 0xF8u) << 8) |
-			  ((uint16_t)(g & 0xFCu) << 3) | (uint16_t)(b >> 3));
+	                  ((uint16_t)(g & 0xFCu) << 3) | (uint16_t)(b >> 3));
 }
 
 void pud_rgb565_to_rgb888(uint16_t px, uint8_t *r, uint8_t *g, uint8_t *b)
@@ -132,7 +132,7 @@ void pud_rgb565_to_rgb888(uint16_t px, uint8_t *r, uint8_t *g, uint8_t *b)
  * into RGB565.  A null/zero destination size keeps the source size.
  */
 uint16_t *pud_rgba_to_rgb565_scaled(const uint8_t *rgba, int sw, int sh, int dw,
-				    int dh)
+                                    int dh)
 {
 	uint16_t *dst;
 	int x, y;
@@ -156,7 +156,7 @@ uint16_t *pud_rgba_to_rgb565_scaled(const uint8_t *rgba, int sw, int sh, int dw,
 			const uint8_t *px = &rgba[((size_t)sy * sw + sx) * 4u];
 
 			dst[(size_t)y * dw + x] =
-				pud_rgb888_to_rgb565(px[0], px[1], px[2]);
+			        pud_rgb888_to_rgb565(px[0], px[1], px[2]);
 		}
 	}
 
@@ -165,7 +165,7 @@ uint16_t *pud_rgba_to_rgb565_scaled(const uint8_t *rgba, int sw, int sh, int dw,
 
 /* Same, for the JPEG path which stays in RGB888. */
 uint8_t *pud_rgba_to_rgb888_scaled(const uint8_t *rgba, int sw, int sh, int dw,
-				   int dh)
+                                   int dh)
 {
 	uint8_t *dst;
 	int x, y;
@@ -209,14 +209,14 @@ uint8_t *pud_rgb565_to_rgb888_buf(const uint16_t *px, size_t count)
 
 	for (i = 0u; i < count; i++) {
 		pud_rgb565_to_rgb888(px[i], &dst[i * 3u], &dst[i * 3u + 1u],
-				     &dst[i * 3u + 2u]);
+		                     &dst[i * 3u + 2u]);
 	}
 
 	return dst;
 }
 
 size_t pud_codec_encode_rgb565(int codec, const uint16_t *pixels, size_t count,
-			       uint8_t *out, size_t capacity)
+                               uint8_t *out, size_t capacity)
 {
 	if (pixels == NULL || out == NULL || count == 0u)
 		return 0u;
@@ -229,11 +229,12 @@ size_t pud_codec_encode_rgb565(int codec, const uint16_t *pixels, size_t count,
 	case PUD_CODEC_LZ4: {
 		int written;
 
-		if (count > (size_t)INT32_MAX / 2u || capacity > (size_t)INT32_MAX)
+		if (count > (size_t)INT32_MAX / 2u ||
+		    capacity > (size_t)INT32_MAX)
 			return 0u;
-		written = LZ4_compress_default((const char *)pixels, (char *)out,
-					       (int)(count * 2u),
-					       (int)capacity);
+		written = LZ4_compress_default((const char *)pixels,
+		                               (char *)out, (int)(count * 2u),
+		                               (int)capacity);
 		return written > 0 ? (size_t)written : 0u;
 	}
 	default:
@@ -242,7 +243,7 @@ size_t pud_codec_encode_rgb565(int codec, const uint16_t *pixels, size_t count,
 }
 
 size_t pud_codec_decode_rgb565(int codec, const uint8_t *in, size_t size,
-			       uint16_t *pixels, size_t capacity)
+                               uint16_t *pixels, size_t capacity)
 {
 	if (in == NULL || pixels == NULL || size == 0u || capacity == 0u)
 		return 0u;
@@ -258,7 +259,7 @@ size_t pud_codec_decode_rgb565(int codec, const uint8_t *in, size_t size,
 		if (size > (size_t)INT32_MAX || capacity > (size_t)INT32_MAX)
 			return 0u;
 		written = LZ4_decompress_safe((const char *)in, (char *)pixels,
-					      (int)size, (int)(capacity * 2u));
+		                              (int)size, (int)(capacity * 2u));
 		return written > 0 ? (size_t)written / 2u : 0u;
 	}
 	default:
@@ -291,8 +292,8 @@ static void jpeg_sink_write(void *context, void *data, int size)
 	sink->len += (size_t)size;
 }
 
-size_t pud_jpeg_encode(const uint8_t *rgb888, int width, int height, int quality,
-		       uint8_t *out, size_t capacity)
+size_t pud_jpeg_encode(const uint8_t *rgb888, int width, int height,
+                       int quality, uint8_t *out, size_t capacity)
 {
 	struct jpeg_sink sink;
 	int ok;
@@ -310,14 +311,15 @@ size_t pud_jpeg_encode(const uint8_t *rgb888, int width, int height, int quality
 	sink.overflow = 0;
 
 	ok = stbi_write_jpg_to_func(jpeg_sink_write, &sink, width, height, 3,
-				    rgb888, quality);
+	                            rgb888, quality);
 	if (!ok || sink.overflow)
 		return 0u;
 
 	return sink.len;
 }
 
-uint8_t *pud_jpeg_decode(const uint8_t *in, size_t size, int *width, int *height)
+uint8_t *pud_jpeg_decode(const uint8_t *in, size_t size, int *width,
+                         int *height)
 {
 	uint8_t *decoded;
 	uint8_t *copy;
@@ -329,7 +331,7 @@ uint8_t *pud_jpeg_decode(const uint8_t *in, size_t size, int *width, int *height
 	decoded = stbi_load_from_memory(in, (int)size, &w, &h, &channels, 3);
 	if (decoded == NULL) {
 		fprintf(stderr, "pudcodec: jpeg decode failed: %s\n",
-			stbi_failure_reason());
+		        stbi_failure_reason());
 		return NULL;
 	}
 
@@ -358,7 +360,7 @@ uint8_t *pud_load_image(const char *path, int *width, int *height)
 }
 
 int pud_write_image(const char *path, const uint8_t *rgb888, int width,
-		    int height, int quality)
+                    int height, int quality)
 {
 	const char *dot = strrchr(path, '.');
 	const char *ext = dot != NULL ? dot + 1 : "";
@@ -372,12 +374,12 @@ int pud_write_image(const char *path, const uint8_t *rgb888, int width,
 		ok = stbi_write_tga(path, width, height, 3, rgb888);
 	else if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0)
 		ok = stbi_write_jpg(path, width, height, 3, rgb888,
-				    quality > 0 ? quality : 95);
+		                    quality > 0 ? quality : 95);
 	else {
 		fprintf(stderr,
-			"pudcodec: unknown image extension '.%s' "
-			"(use png, bmp, tga or jpg)\n",
-			ext);
+		        "pudcodec: unknown image extension '.%s' "
+		        "(use png, bmp, tga or jpg)\n",
+		        ext);
 		return -1;
 	}
 

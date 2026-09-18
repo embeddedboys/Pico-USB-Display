@@ -26,7 +26,7 @@
 #include "pud.h"
 #include "decoder.h"
 
-struct pud_data g_pud_data = {0};
+struct pud_data g_pud_data = { 0 };
 
 /*
  * The length is clamped to the field: these are fed from the host's EP2 request
@@ -35,55 +35,55 @@ struct pud_data g_pud_data = {0};
  * every query left g_pud_data.disp as garbage), and a large one would have
  * walked through RAM.
  */
-#define define_pud_rw_attr(field, field_type)		\
-void pud_get_rw_##field(field_type *ptr, int len)	\
-{							\
-	struct pud_data *data = &g_pud_data;		\
-	if (len > (int)sizeof(data->field))		\
-		len = (int)sizeof(data->field);		\
-	memcpy((void *)ptr, &data->field, len);		\
-}							\
-void pud_set_rw_##field(field_type *ptr, int len)	\
-{							\
-	struct pud_data *data = &g_pud_data;		\
-	if (len > (int)sizeof(data->field))		\
-		len = (int)sizeof(data->field);		\
-	memcpy(&data->field, (void *)ptr, len);		\
-}
+#define define_pud_rw_attr(field, field_type)             \
+	void pud_get_rw_##field(field_type *ptr, int len) \
+	{                                                 \
+		struct pud_data *data = &g_pud_data;      \
+		if (len > (int)sizeof(data->field))       \
+			len = (int)sizeof(data->field);   \
+		memcpy((void *)ptr, &data->field, len);   \
+	}                                                 \
+	void pud_set_rw_##field(field_type *ptr, int len) \
+	{                                                 \
+		struct pud_data *data = &g_pud_data;      \
+		if (len > (int)sizeof(data->field))       \
+			len = (int)sizeof(data->field);   \
+		memcpy(&data->field, (void *)ptr, len);   \
+	}
 
-#define define_pud_ro_attr(field, field_type)		\
-void pud_get_ro_##field(field_type *ptr, int len)	\
-{							\
-	struct pud_data *data = &g_pud_data;		\
-	if (len > (int)sizeof(data->field))		\
-		len = (int)sizeof(data->field);		\
-	memcpy((void *)ptr, &data->field, len);		\
-}
+#define define_pud_ro_attr(field, field_type)             \
+	void pud_get_ro_##field(field_type *ptr, int len) \
+	{                                                 \
+		struct pud_data *data = &g_pud_data;      \
+		if (len > (int)sizeof(data->field))       \
+			len = (int)sizeof(data->field);   \
+		memcpy((void *)ptr, &data->field, len);   \
+	}
 
-#define define_pud_rw_sub_attr(parent, field, field_type)	\
-void pud_get_rw_##parent##_##field(field_type *ptr, int len)	\
-{								\
-	struct pud_data *data = &g_pud_data;			\
-	if (len > (int)sizeof(data->parent.field))		\
-		len = (int)sizeof(data->parent.field);		\
-	memcpy((void *)ptr, &data->parent.field, len);		\
-}								\
-void pud_set_rw_##parent##_##field(field_type *ptr, int len)	\
-{								\
-	struct pud_data *data = &g_pud_data;			\
-	if (len > (int)sizeof(data->parent.field))		\
-		len = (int)sizeof(data->parent.field);		\
-	memcpy(&data->parent.field, (void *)ptr, len);		\
-}
+#define define_pud_rw_sub_attr(parent, field, field_type)            \
+	void pud_get_rw_##parent##_##field(field_type *ptr, int len) \
+	{                                                            \
+		struct pud_data *data = &g_pud_data;                 \
+		if (len > (int)sizeof(data->parent.field))           \
+			len = (int)sizeof(data->parent.field);       \
+		memcpy((void *)ptr, &data->parent.field, len);       \
+	}                                                            \
+	void pud_set_rw_##parent##_##field(field_type *ptr, int len) \
+	{                                                            \
+		struct pud_data *data = &g_pud_data;                 \
+		if (len > (int)sizeof(data->parent.field))           \
+			len = (int)sizeof(data->parent.field);       \
+		memcpy(&data->parent.field, (void *)ptr, len);       \
+	}
 
-#define define_pud_ro_sub_attr(parent, field, field_type)	\
-void pud_get_ro_##parent##_##field(field_type *ptr, int len)	\
-{								\
-	struct pud_data *data = &g_pud_data;			\
-	if (len > (int)sizeof(data->parent.field))		\
-		len = (int)sizeof(data->parent.field);		\
-	memcpy((void *)ptr, &data->parent.field, len);		\
-}
+#define define_pud_ro_sub_attr(parent, field, field_type)            \
+	void pud_get_ro_##parent##_##field(field_type *ptr, int len) \
+	{                                                            \
+		struct pud_data *data = &g_pud_data;                 \
+		if (len > (int)sizeof(data->parent.field))           \
+			len = (int)sizeof(data->parent.field);       \
+		memcpy((void *)ptr, &data->parent.field, len);       \
+	}
 
 define_pud_rw_attr(cmd, u8);
 define_pud_ro_attr(sn, u8);
@@ -131,8 +131,8 @@ static void pud_show_debug_info(void)
 	pud_get_ro_disp_xres(&xres, sizeof(xres));
 	pud_get_ro_disp_yres(&yres, sizeof(yres));
 	pud_get_ro_disp_pixelclock_khz(&pixelclock_khz, sizeof(pixelclock_khz));
-	printf("%s, xres : %d, yres : %d, pixelclock_khz : %d\n",
-		__func__, xres, yres, pixelclock_khz);
+	printf("%s, xres : %d, yres : %d, pixelclock_khz : %d\n", __func__,
+	       xres, yres, pixelclock_khz);
 }
 
 static void pud_config_init(void)
@@ -159,7 +159,8 @@ static void pud_config_init(void)
 	data->disp.height_mm = PUD_PANEL_HEIGHT_MM;
 
 	/* 0 when this build has no touch driver (PUD_CAPS_TOUCH is clear then) */
-	data->tp.polling_period = INDEV_DRV_NOT_USED ? 0 : INDEV_POLLING_PERIOD_MS;
+	data->tp.polling_period = INDEV_DRV_NOT_USED ? 0 :
+	                                               INDEV_POLLING_PERIOD_MS;
 }
 
 /*
@@ -200,7 +201,7 @@ void pud_touch_poll(void)
 	data->tp.y = y;
 
 	if (!pressed && !was_pressed)
-		return;		/* idle, and it already knows */
+		return; /* idle, and it already knows */
 
 	was_pressed = pressed;
 

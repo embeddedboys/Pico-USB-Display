@@ -47,15 +47,15 @@ extern uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
  * endpoint NAKs, so the host's bulk write waits instead of the frame being
  * dropped.  Only touched from the USB ISR and the decoder task.
  */
-static volatile bool s_ep1_armed;     /* a read is in flight */
-static volatile bool s_ep1_stalled;   /* refused a transfer, stall not cleared */
-static volatile uint32_t s_ep1_got;   /* bytes of this transfer received */
+static volatile bool s_ep1_armed; /* a read is in flight */
+static volatile bool s_ep1_stalled; /* refused a transfer, stall not cleared */
+static volatile uint32_t s_ep1_got; /* bytes of this transfer received */
 static volatile uint32_t s_ep1_total; /* header + payload; 0 until parsed */
 static struct pud_ep1_header s_ep1_hdr;
 
 /* Diagnostics, readable from a debugger; both stay 0 with a matching host. */
 volatile u32 g_ep1_stat_oversize; /* declared more than ep1_read_buffer holds */
-volatile u32 g_ep1_stat_bad;      /* no usable header, or a length mismatch */
+volatile u32 g_ep1_stat_bad; /* no usable header, or a length mismatch */
 
 void usbd_vendor_ep1_reset(void)
 {
@@ -107,8 +107,8 @@ static void ep1_finish(bool submit)
 	if (submit && size) {
 		/* Do not decode here: this runs on the USB interrupt stack. */
 		decoder_submit_frame(xs, ys, xe, ye,
-				     ep1_read_buffer + PUD_EP1_HEADER_SIZE,
-				     size);
+		                     ep1_read_buffer + PUD_EP1_HEADER_SIZE,
+		                     size);
 		/* The payload was copied into a frame slot, so ep1_read_buffer is
 		 * free again: arm the next transfer right away if a slot is still
 		 * free.  Waiting for the decoder task instead would leave EP1
@@ -199,7 +199,10 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 			.rotation = g_pud_data.disp.rotation,
 			.bpp = g_pud_data.disp.bpp,
 			.intf_type = g_pud_data.disp.intf_type,
-			.tp_polling_period = INDEV_DRV_NOT_USED ? 0 : g_pud_data.tp.polling_period,
+			.tp_polling_period =
+			        INDEV_DRV_NOT_USED ?
+			                0 :
+			                g_pud_data.tp.polling_period,
 			.width_mm = g_pud_data.disp.width_mm,
 			.height_mm = g_pud_data.disp.height_mm,
 			/* the host uses this to decide whether to register an input
@@ -245,8 +248,8 @@ void usbd_vendor_ep2_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
  * queueing stale samples would only add latency.
  */
 static struct pud_touch_report s_ep4_report;
-static volatile bool s_ep4_busy;	/* transfer in flight */
-static volatile bool s_ep4_dirty;	/* a newer report arrived meanwhile */
+static volatile bool s_ep4_busy; /* transfer in flight */
+static volatile bool s_ep4_dirty; /* a newer report arrived meanwhile */
 
 static int usbd_vendor_ep4_arm(void)
 {
@@ -257,7 +260,7 @@ static int usbd_vendor_ep4_arm(void)
 	s_ep4_busy = true;
 
 	rc = usbd_ep_start_write(0, EP4_IN_ADDR, ep4_write_buffer,
-				 sizeof(s_ep4_report));
+	                         sizeof(s_ep4_report));
 	if (rc < 0)
 		s_ep4_busy = false;
 
@@ -284,7 +287,7 @@ int usbd_vendor_ep4_submit(const struct pud_touch_report *report)
 int usbd_vendor_ep4_request(void)
 {
 	if (s_ep4_busy)
-		return 0;	/* already on its way to the host */
+		return 0; /* already on its way to the host */
 
 	return usbd_vendor_ep4_arm();
 }

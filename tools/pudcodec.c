@@ -55,61 +55,61 @@ enum mode {
 struct options {
 	int mode;
 	int codec;
-	const char *input;           /* img2s / s2img */
+	const char *input; /* img2s / s2img */
 	const char *output;
 	const char *array_name;
-	const char *raw_input;       /* video2s --raw */
-	const char *t_value;         /* -t, validated per mode */
+	const char *raw_input; /* video2s --raw */
+	const char *t_value; /* -t, validated per mode */
 	const char *list[MAX_FRAMES];
 	int list_count;
-	int width;                   /* resize, or stream dimensions for s2img */
+	int width; /* resize, or stream dimensions for s2img */
 	int height;
 	int quality;
-	int band;                    /* LZ4: rows per block (0 = as many as fit) */
+	int band; /* LZ4: rows per block (0 = as many as fit) */
 };
 
 static void usage(FILE *out, const char *prog)
 {
 	fprintf(out,
-		"Usage:\n"
-		"  %s --codec <qoi|rle|lz4|jpeg> img2s   [options] <image>\n"
-		"  %s --codec <qoi|rle|lz4|jpeg> s2img   [options] <stream>\n"
-		"  %s --codec <qoi|rle|lz4|jpeg> video2s [options] <frames...>\n"
-		"\n"
-		"Convert to and from the RGB565 streams the Pico USB Display\n"
-		"decodes.  The codec is chosen at run time and has to match the\n"
-		"DECODER_TYPE the device is built with (jpeg covers 0 and 1).\n"
-		"\n"
-		"Modes:\n"
-		"  img2s    one image  -> one codec stream\n"
-		"  s2img    one stream -> one image\n"
-		"  video2s  frames     -> one frame container (images or --raw)\n"
-		"\n"
-		"Options:\n"
-		"  --codec <name>  qoi | rle | lz4 | jpeg; 'auto' takes it from a\n"
-		"                  .h input that carries a _CODEC tag\n"
-		"  -o <file>       output file (default: <input>.<codec>.h/.bin,\n"
-		"                  or <input>.png for s2img)\n"
-		"  -t <type>       img2s/video2s: 'h' (C header, default) or 'bin'\n"
-		"                  s2img: png | jpg | bmp | tga (default png)\n"
-		"  -n <name>       C array / base name (default: from the file name)\n"
-		"  -w <pixels>     width: resize for img2s/video2s, required for a\n"
-		"                  .bin stream in s2img\n"
-		"  -h <pixels>     height, same rules as -w\n"
-		"  -q <1..100>     JPEG quality (default %d)\n"
-		"  --band <rows>   LZ4 only: rows per block (default: as many as the\n"
-		"                  device's band buffer takes).  LZ4 is stored as a\n"
-		"                  block container, one block per band\n"
-		"  --raw <file>    video2s: one file of concatenated raw RGB565\n"
-		"                  frames instead of an image list (needs -w/-h)\n"
-		"  --help          this text\n"
-		"\n"
-		"Examples:\n"
-		"  %s --codec rle img2s logo.jpg -o bootlogo.rle.h -n bootlogo\n"
-		"  %s --codec qoi img2s photo.png -w 480 -h 320 -t bin\n"
-		"  %s --codec rle s2img logo.rle.bin -w 480 -h 320\n"
-		"  %s --codec qoi video2s frames/*.png -w 480 -h 320 -o clip.qoi.h\n",
-		prog, prog, prog, DEFAULT_JPEG_QUALITY, prog, prog, prog, prog);
+	        "Usage:\n"
+	        "  %s --codec <qoi|rle|lz4|jpeg> img2s   [options] <image>\n"
+	        "  %s --codec <qoi|rle|lz4|jpeg> s2img   [options] <stream>\n"
+	        "  %s --codec <qoi|rle|lz4|jpeg> video2s [options] <frames...>\n"
+	        "\n"
+	        "Convert to and from the RGB565 streams the Pico USB Display\n"
+	        "decodes.  The codec is chosen at run time and has to match the\n"
+	        "DECODER_TYPE the device is built with (jpeg covers 0 and 1).\n"
+	        "\n"
+	        "Modes:\n"
+	        "  img2s    one image  -> one codec stream\n"
+	        "  s2img    one stream -> one image\n"
+	        "  video2s  frames     -> one frame container (images or --raw)\n"
+	        "\n"
+	        "Options:\n"
+	        "  --codec <name>  qoi | rle | lz4 | jpeg; 'auto' takes it from a\n"
+	        "                  .h input that carries a _CODEC tag\n"
+	        "  -o <file>       output file (default: <input>.<codec>.h/.bin,\n"
+	        "                  or <input>.png for s2img)\n"
+	        "  -t <type>       img2s/video2s: 'h' (C header, default) or 'bin'\n"
+	        "                  s2img: png | jpg | bmp | tga (default png)\n"
+	        "  -n <name>       C array / base name (default: from the file name)\n"
+	        "  -w <pixels>     width: resize for img2s/video2s, required for a\n"
+	        "                  .bin stream in s2img\n"
+	        "  -h <pixels>     height, same rules as -w\n"
+	        "  -q <1..100>     JPEG quality (default %d)\n"
+	        "  --band <rows>   LZ4 only: rows per block (default: as many as the\n"
+	        "                  device's band buffer takes).  LZ4 is stored as a\n"
+	        "                  block container, one block per band\n"
+	        "  --raw <file>    video2s: one file of concatenated raw RGB565\n"
+	        "                  frames instead of an image list (needs -w/-h)\n"
+	        "  --help          this text\n"
+	        "\n"
+	        "Examples:\n"
+	        "  %s --codec rle img2s logo.jpg -o bootlogo.rle.h -n bootlogo\n"
+	        "  %s --codec qoi img2s photo.png -w 480 -h 320 -t bin\n"
+	        "  %s --codec rle s2img logo.rle.bin -w 480 -h 320\n"
+	        "  %s --codec qoi video2s frames/*.png -w 480 -h 320 -o clip.qoi.h\n",
+	        prog, prog, prog, DEFAULT_JPEG_QUALITY, prog, prog, prog, prog);
 }
 
 static int parse_args(int argc, char **argv, struct options *opt)
@@ -133,9 +133,9 @@ static int parse_args(int argc, char **argv, struct options *opt)
 				opt->codec = pud_codec_by_name(name);
 				if (opt->codec < 0) {
 					fprintf(stderr,
-						"pudcodec: unknown codec '%s' "
-						"(qoi, rle, lz4, jpeg)\n",
-						name);
+					        "pudcodec: unknown codec '%s' "
+					        "(qoi, rle, lz4, jpeg)\n",
+					        name);
 					return -1;
 				}
 			}
@@ -156,16 +156,17 @@ static int parse_args(int argc, char **argv, struct options *opt)
 		} else if (strcmp(arg, "-t") == 0 && i + 1 < argc) {
 			opt->t_value = argv[++i];
 		} else if (arg[0] == '-' && arg[1] != '\0') {
-			fprintf(stderr, "pudcodec: unknown option '%s'\n\n", arg);
+			fprintf(stderr, "pudcodec: unknown option '%s'\n\n",
+			        arg);
 			usage(stderr, argv[0]);
 			return -1;
 		} else if (opt->mode == MODE_NONE &&
-			   (strcmp(arg, "img2s") == 0 ||
-			    strcmp(arg, "s2img") == 0 ||
-			    strcmp(arg, "video2s") == 0)) {
-			opt->mode = strcmp(arg, "img2s") == 0   ? MODE_IMG2S
-				    : strcmp(arg, "s2img") == 0 ? MODE_S2IMG
-								: MODE_VIDEO2S;
+		           (strcmp(arg, "img2s") == 0 ||
+		            strcmp(arg, "s2img") == 0 ||
+		            strcmp(arg, "video2s") == 0)) {
+			opt->mode = strcmp(arg, "img2s") == 0 ? MODE_IMG2S :
+			            strcmp(arg, "s2img") == 0 ? MODE_S2IMG :
+			                                        MODE_VIDEO2S;
 		} else if (opt->mode == MODE_VIDEO2S) {
 			if (opt->list_count >= MAX_FRAMES) {
 				fprintf(stderr, "pudcodec: too many frames\n");
@@ -184,19 +185,21 @@ static int parse_args(int argc, char **argv, struct options *opt)
 	}
 
 	if (opt->t_value != NULL && opt->mode != MODE_S2IMG &&
-	    strcmp(opt->t_value, "h") != 0 && strcmp(opt->t_value, "bin") != 0) {
+	    strcmp(opt->t_value, "h") != 0 &&
+	    strcmp(opt->t_value, "bin") != 0) {
 		fprintf(stderr,
-			"pudcodec: -t %s is not valid here "
-			"(img2s/video2s take 'h' or 'bin')\n",
-			opt->t_value);
+		        "pudcodec: -t %s is not valid here "
+		        "(img2s/video2s take 'h' or 'bin')\n",
+		        opt->t_value);
 		return -1;
 	}
 	if (opt->t_value != NULL && opt->mode == MODE_S2IMG &&
-	    (strcmp(opt->t_value, "h") == 0 || strcmp(opt->t_value, "bin") == 0)) {
+	    (strcmp(opt->t_value, "h") == 0 ||
+	     strcmp(opt->t_value, "bin") == 0)) {
 		fprintf(stderr,
-			"pudcodec: -t %s is not valid here "
-			"(s2img takes png, jpg, bmp or tga)\n",
-			opt->t_value);
+		        "pudcodec: -t %s is not valid here "
+		        "(s2img takes png, jpg, bmp or tga)\n",
+		        opt->t_value);
 		return -1;
 	}
 
@@ -221,17 +224,18 @@ static int codec_from_header(struct options *opt, const char *header_text)
 	if (opt->codec >= 0)
 		return 0;
 
-	if (pud_parse_define_str(header_text, "_CODEC", tag, sizeof(tag)) == 0) {
+	if (pud_parse_define_str(header_text, "_CODEC", tag, sizeof(tag)) ==
+	    0) {
 		fprintf(stderr,
-			"pudcodec: pass --codec <qoi|rle|lz4|jpeg> "
-			"(or --codec auto for a header that names one)\n");
+		        "pudcodec: pass --codec <qoi|rle|lz4|jpeg> "
+		        "(or --codec auto for a header that names one)\n");
 		return -1;
 	}
 
 	opt->codec = pud_codec_by_name(tag);
 	if (opt->codec < 0) {
-		fprintf(stderr, "pudcodec: header asks for unknown codec '%s'\n",
-			tag);
+		fprintf(stderr,
+		        "pudcodec: header asks for unknown codec '%s'\n", tag);
 		return -1;
 	}
 
@@ -242,15 +246,16 @@ static int codec_from_header(struct options *opt, const char *header_text)
 
 /* Encode one RGBA source image (what stb hands us) into a fresh stream. */
 static uint8_t *encode_frame(const struct options *opt, const uint8_t *rgba,
-			     int src_w, int src_h, int dst_w, int dst_h,
-			     size_t *out_size)
+                             int src_w, int src_h, int dst_w, int dst_h,
+                             size_t *out_size)
 {
 	size_t capacity = pud_codec_max_size(opt->codec, dst_w, dst_h);
 	size_t raw_size = (size_t)dst_w * (size_t)dst_h * 2u;
 	uint8_t *out;
 
 	if (capacity == 0u) {
-		fprintf(stderr, "pudcodec: bad dimensions %dx%d\n", dst_w, dst_h);
+		fprintf(stderr, "pudcodec: bad dimensions %dx%d\n", dst_w,
+		        dst_h);
 		return NULL;
 	}
 
@@ -260,31 +265,31 @@ static uint8_t *encode_frame(const struct options *opt, const uint8_t *rgba,
 
 	if (opt->codec == PUD_CODEC_JPEG) {
 		uint8_t *rgb = pud_rgba_to_rgb888_scaled(rgba, src_w, src_h,
-							 dst_w, dst_h);
+		                                         dst_w, dst_h);
 
 		if (rgb == NULL) {
 			free(out);
 			return NULL;
 		}
-		*out_size = pud_jpeg_encode(rgb, dst_w, dst_h, opt->quality, out,
-					    capacity);
+		*out_size = pud_jpeg_encode(rgb, dst_w, dst_h, opt->quality,
+		                            out, capacity);
 		free(rgb);
 	} else {
 		uint16_t *px = pud_rgba_to_rgb565_scaled(rgba, src_w, src_h,
-							 dst_w, dst_h);
+		                                         dst_w, dst_h);
 
 		if (px == NULL) {
 			free(out);
 			return NULL;
 		}
-		*out_size = pud_codec_encode_rgb565(opt->codec, px, raw_size / 2u,
-						    out, capacity);
+		*out_size = pud_codec_encode_rgb565(
+		        opt->codec, px, raw_size / 2u, out, capacity);
 		free(px);
 	}
 
 	if (*out_size == 0u) {
 		fprintf(stderr, "pudcodec: %s encode failed\n",
-			pud_codec_name(opt->codec));
+		        pud_codec_name(opt->codec));
 		free(out);
 		return NULL;
 	}
@@ -323,8 +328,8 @@ static int lz4_band_rows(const struct options *opt, int width, int height)
  * many rows as the device's band buffer takes).
  */
 static int encode_blocks(const struct options *opt, const uint8_t *rgba,
-			 int src_w, int src_h, int dst_w, int dst_h,
-			 struct blocks *out)
+                         int src_w, int src_h, int dst_w, int dst_h,
+                         struct blocks *out)
 {
 	int y, rows;
 	size_t capacity;
@@ -332,8 +337,8 @@ static int encode_blocks(const struct options *opt, const uint8_t *rgba,
 	memset(out, 0, sizeof(*out));
 
 	if (opt->codec != PUD_CODEC_LZ4) {
-		out->data[0] = encode_frame(opt, rgba, src_w, src_h, dst_w, dst_h,
-					    &out->size[0]);
+		out->data[0] = encode_frame(opt, rgba, src_w, src_h, dst_w,
+		                            dst_h, &out->size[0]);
 		if (out->data[0] == NULL)
 			return -1;
 		out->count = 1;
@@ -342,7 +347,7 @@ static int encode_blocks(const struct options *opt, const uint8_t *rgba,
 
 	{
 		uint16_t *px = pud_rgba_to_rgb565_scaled(rgba, src_w, src_h,
-							 dst_w, dst_h);
+		                                         dst_w, dst_h);
 
 		if (px == NULL)
 			return -1;
@@ -364,10 +369,11 @@ static int encode_blocks(const struct options *opt, const uint8_t *rgba,
 				return -1;
 			}
 			out->size[out->count] = pud_codec_encode_rgb565(
-				opt->codec, px + (size_t)y * dst_w,
-				(size_t)bh * dst_w, buf, capacity);
+			        opt->codec, px + (size_t)y * dst_w,
+			        (size_t)bh * dst_w, buf, capacity);
 			if (out->size[out->count] == 0u) {
-				fprintf(stderr, "pudcodec: band at row %d failed\n", y);
+				fprintf(stderr,
+				        "pudcodec: band at row %d failed\n", y);
 				free(buf);
 				free(px);
 				return -1;
@@ -470,7 +476,8 @@ static int mode_img2s(struct options *opt)
 	out_w = opt->width > 0 ? opt->width : img_w;
 	out_h = opt->height > 0 ? opt->height : img_h;
 
-	if (encode_blocks(opt, rgba, img_w, img_h, out_w, out_h, &blocks) != 0) {
+	if (encode_blocks(opt, rgba, img_w, img_h, out_w, out_h, &blocks) !=
+	    0) {
 		free(rgba);
 		return EXIT_FAILURE;
 	}
@@ -485,7 +492,7 @@ static int mode_img2s(struct options *opt)
 		char ext[64];
 
 		snprintf(ext, sizeof(ext), ".%s.%s", pud_codec_name(opt->codec),
-			 want_header(opt) ? "h" : "bin");
+		         want_header(opt) ? "h" : "bin");
 		pud_output_name(opt->input, ext, path_buf, sizeof(path_buf));
 		output = path_buf;
 	}
@@ -511,22 +518,24 @@ static int mode_img2s(struct options *opt)
 		}
 		stream_size = container_size;
 		if (want_header(opt)) {
-			if (pud_write_codec_header(fp, pud_codec_name(opt->codec),
-						   array_name, opt->input, out_w,
-						   out_h, container,
-						   container_size, raw_size) != 0) {
-				fprintf(stderr, "pudcodec: header write failed\n");
+			if (pud_write_codec_header(
+			            fp, pud_codec_name(opt->codec), array_name,
+			            opt->input, out_w, out_h, container,
+			            container_size, raw_size) != 0) {
+				fprintf(stderr,
+				        "pudcodec: header write failed\n");
 				goto done;
 			}
-		} else if (pud_write_binary(fp, container,
-					    container_size) != 0) {
+		} else if (pud_write_binary(fp, container, container_size) !=
+		           0) {
 			fprintf(stderr, "pudcodec: container write failed\n");
 			goto done;
 		}
 	} else if (want_header(opt)) {
 		if (pud_write_codec_header(fp, pud_codec_name(opt->codec),
-					   array_name, opt->input, out_w, out_h,
-					   stream, stream_size, raw_size) != 0) {
+		                           array_name, opt->input, out_w, out_h,
+		                           stream, stream_size,
+		                           raw_size) != 0) {
 			fprintf(stderr, "pudcodec: header write failed\n");
 			goto done;
 		}
@@ -545,12 +554,12 @@ done:
 
 	printf("\n");
 	pud_print_size_comparison(pud_basename(opt->input), raw_size,
-				  stream_size);
+	                          stream_size);
 	printf("  dimensions  : %d x %d (%zu pixels, RGB565)\n", out_w, out_h,
 	       (size_t)out_w * (size_t)out_h);
 	if (opt->codec == PUD_CODEC_LZ4)
-		printf("  bands       : %d block(s), rows of %d\n",
-		       band_count, lz4_band_rows(opt, out_w, out_h));
+		printf("  bands       : %d block(s), rows of %d\n", band_count,
+		       lz4_band_rows(opt, out_w, out_h));
 	printf("  decoder type: %d (PUD_CMD_GET_CAPS)\n",
 	       pud_codec_decoder_type(opt->codec));
 	printf("  output      : %s (%s)\n\n", output,
@@ -566,8 +575,8 @@ done:
  * dimensions come from the image itself.
  */
 static uint8_t *load_stream(const struct options *opt, const char *header_text,
-			    size_t header_size, size_t *stream_size, int *width,
-			    int *height, int self_sized)
+                            size_t header_size, size_t *stream_size, int *width,
+                            int *height, int self_sized)
 {
 	uint8_t *stream;
 	long declared;
@@ -581,8 +590,8 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
 		*height = opt->height;
 		if (!self_sized && (*width <= 0 || *height <= 0)) {
 			fprintf(stderr,
-				"pudcodec: this stream carries no dimensions, "
-				"so it needs -w and -h\n");
+			        "pudcodec: this stream carries no dimensions, "
+			        "so it needs -w and -h\n");
 			free(stream);
 			return NULL;
 		}
@@ -594,7 +603,7 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
 	*height = (int)pud_parse_define(header_text, "_HEIGHT", 0);
 	if (*width <= 0 || *height <= 0) {
 		fprintf(stderr, "pudcodec: '%s' has no dimensions\n",
-			opt->input);
+		        opt->input);
 		return NULL;
 	}
 
@@ -612,10 +621,11 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
 	if (stream == NULL)
 		return NULL;
 
-	*stream_size = pud_parse_codec_array(header_text, stream,
-					     (size_t)declared);
+	*stream_size =
+	        pud_parse_codec_array(header_text, stream, (size_t)declared);
 	if (*stream_size == 0u) {
-		fprintf(stderr, "pudcodec: no codec array in '%s'\n", opt->input);
+		fprintf(stderr, "pudcodec: no codec array in '%s'\n",
+		        opt->input);
 		free(stream);
 		return NULL;
 	}
@@ -630,8 +640,8 @@ static uint8_t *load_stream(const struct options *opt, const char *header_text,
  * follows from the block count and the image height.
  */
 static uint8_t *lz4_decode_container(const uint8_t *blob, size_t size,
-				     int width, int height, int count,
-				     int *out_w, int *out_h)
+                                     int width, int height, int count,
+                                     int *out_w, int *out_h)
 {
 	uint16_t *frame;
 	uint16_t *band;
@@ -664,10 +674,11 @@ static uint8_t *lz4_decode_container(const uint8_t *blob, size_t size,
 			break;
 
 		got = pud_codec_decode_rgb565(PUD_CODEC_LZ4, blob + start,
-					      end - start, band,
-					      (size_t)width * rows);
+		                              end - start, band,
+		                              (size_t)width * rows);
 		if (got != (size_t)width * (size_t)rows) {
-			fprintf(stderr, "pudcodec: lz4 band %d did not decode\n", i);
+			fprintf(stderr,
+			        "pudcodec: lz4 band %d did not decode\n", i);
 			free(frame);
 			free(band);
 			return NULL;
@@ -724,7 +735,7 @@ static int mode_s2img(struct options *opt)
 	}
 
 	stream = load_stream(opt, header_text, header_size, &stream_size,
-			     &width, &height, opt->codec == PUD_CODEC_JPEG);
+	                     &width, &height, opt->codec == PUD_CODEC_JPEG);
 	free(header_text);
 	if (stream == NULL)
 		return EXIT_FAILURE;
@@ -738,11 +749,11 @@ static int mode_s2img(struct options *opt)
 		}
 		memcpy(&blocks, stream, 4);
 		rgb = lz4_decode_container(stream, stream_size, width, height,
-					   (int)blocks, &out_w, &out_h);
+		                           (int)blocks, &out_w, &out_h);
 		if (rgb == NULL) {
 			fprintf(stderr,
-				"pudcodec: not an LZ4 block container, or the "
-				"band geometry does not fit -w/-h\n");
+			        "pudcodec: not an LZ4 block container, or the "
+			        "band geometry does not fit -w/-h\n");
 			free(stream);
 			return EXIT_FAILURE;
 		}
@@ -762,12 +773,12 @@ static int mode_s2img(struct options *opt)
 		}
 
 		count = pud_codec_decode_rgb565(opt->codec, stream, stream_size,
-						pixels, count);
+		                                pixels, count);
 		if (count == 0u) {
 			fprintf(stderr,
-				"pudcodec: %s decode failed "
-				"(wrong codec, or wrong -w/-h?)\n",
-				pud_codec_name(opt->codec));
+			        "pudcodec: %s decode failed "
+			        "(wrong codec, or wrong -w/-h?)\n",
+			        pud_codec_name(opt->codec));
 			free(pixels);
 			free(stream);
 			return EXIT_FAILURE;
@@ -804,9 +815,9 @@ done:
 	printf("  decoded     : %d x %d (%zu pixels) from %zu encoded bytes\n",
 	       out_w, out_h, (size_t)out_w * (size_t)out_h, stream_size);
 	if (opt->codec != PUD_CODEC_JPEG)
-		pud_print_size_comparison("stream", (size_t)out_w *
-							  (size_t)out_h * 2u,
-					  stream_size);
+		pud_print_size_comparison("stream",
+		                          (size_t)out_w * (size_t)out_h * 2u,
+		                          stream_size);
 	printf("  output      : %s\n\n", output);
 
 	return ret;
@@ -844,9 +855,8 @@ static int mode_video2s(struct options *opt)
 		if (raw == NULL)
 			return EXIT_FAILURE;
 		if (width <= 0 || height <= 0) {
-			fprintf(stderr,
-				"pudcodec: --raw needs -w and -h "
-				"(the file is raw RGB565)\n");
+			fprintf(stderr, "pudcodec: --raw needs -w and -h "
+			                "(the file is raw RGB565)\n");
 			free(raw);
 			return EXIT_FAILURE;
 		}
@@ -854,9 +864,9 @@ static int mode_video2s(struct options *opt)
 		frame_bytes = (size_t)width * (size_t)height * 2u;
 		if (raw_size == 0u || raw_size % frame_bytes != 0u) {
 			fprintf(stderr,
-				"pudcodec: %zu bytes is not a whole number of "
-				"%dx%d RGB565 frames\n",
-				raw_size, width, height);
+			        "pudcodec: %zu bytes is not a whole number of "
+			        "%dx%d RGB565 frames\n",
+			        raw_size, width, height);
 			free(raw);
 			return EXIT_FAILURE;
 		}
@@ -864,14 +874,15 @@ static int mode_video2s(struct options *opt)
 		raw_frames = (int)(raw_size / frame_bytes);
 		if (raw_frames > MAX_FRAMES) {
 			fprintf(stderr, "pudcodec: more than %d frames\n",
-				MAX_FRAMES);
+			        MAX_FRAMES);
 			free(raw);
 			return EXIT_FAILURE;
 		}
 
 		for (i = 0; i < raw_frames; i++) {
 			const uint16_t *px =
-				(const uint16_t *)(raw + (size_t)i * frame_bytes);
+			        (const uint16_t *)(raw +
+			                           (size_t)i * frame_bytes);
 
 			if (opt->codec == PUD_CODEC_LZ4) {
 				/* one block per band, like the image path */
@@ -879,25 +890,29 @@ static int mode_video2s(struct options *opt)
 				int y;
 
 				for (y = 0; y < height; y += rows) {
-					int bh = height - y < rows ? height - y : rows;
+					int bh = height - y < rows ?
+					                 height - y :
+					                 rows;
 					size_t capacity = pud_codec_max_size(
-						opt->codec, width, bh);
+					        opt->codec, width, bh);
 					uint8_t *out = malloc(capacity);
 					size_t got;
 
-					if (out == NULL || count >= MAX_FRAMES) {
+					if (out == NULL ||
+					    count >= MAX_FRAMES) {
 						free(out);
 						free(raw);
 						goto done;
 					}
 					got = pud_codec_encode_rgb565(
-						opt->codec,
-						px + (size_t)y * width,
-						(size_t)bh * width, out, capacity);
+					        opt->codec,
+					        px + (size_t)y * width,
+					        (size_t)bh * width, out,
+					        capacity);
 					if (got == 0u) {
 						fprintf(stderr,
-							"pudcodec: frame %d band %d failed\n",
-							i, y / rows);
+						        "pudcodec: frame %d band %d failed\n",
+						        i, y / rows);
 						free(out);
 						free(raw);
 						goto done;
@@ -912,9 +927,8 @@ static int mode_video2s(struct options *opt)
 			}
 
 			{
-				size_t capacity = pud_codec_max_size(opt->codec,
-								     width,
-								     height);
+				size_t capacity = pud_codec_max_size(
+				        opt->codec, width, height);
 				uint8_t *out = malloc(capacity);
 
 				if (out == NULL) {
@@ -922,11 +936,12 @@ static int mode_video2s(struct options *opt)
 					goto done;
 				}
 				sizes[count] = pud_codec_encode_rgb565(
-					opt->codec, px, (size_t)width * height,
-					out, capacity);
+				        opt->codec, px, (size_t)width * height,
+				        out, capacity);
 				if (sizes[count] == 0u) {
 					fprintf(stderr,
-						"pudcodec: frame %d failed\n", i);
+					        "pudcodec: frame %d failed\n",
+					        i);
 					free(out);
 					free(raw);
 					goto done;
@@ -943,12 +958,12 @@ static int mode_video2s(struct options *opt)
 			int img_w = 0, img_h = 0;
 			struct blocks fb;
 			uint8_t *rgba =
-				pud_load_image(opt->list[i], &img_w, &img_h);
+			        pud_load_image(opt->list[i], &img_w, &img_h);
 			int b;
 
 			if (rgba == NULL) {
 				fprintf(stderr, "pudcodec: cannot load '%s'\n",
-					opt->list[i]);
+				        opt->list[i]);
 				goto done;
 			}
 			if (width <= 0)
@@ -956,8 +971,8 @@ static int mode_video2s(struct options *opt)
 			if (height <= 0)
 				height = img_h;
 
-			if (encode_blocks(opt, rgba, img_w, img_h, width, height,
-					  &fb) != 0) {
+			if (encode_blocks(opt, rgba, img_w, img_h, width,
+			                  height, &fb) != 0) {
 				free(rgba);
 				goto done;
 			}
@@ -979,7 +994,8 @@ static int mode_video2s(struct options *opt)
 		}
 
 		if (count == 0) {
-			fprintf(stderr, "pudcodec: video2s needs frames (or --raw)\n");
+			fprintf(stderr,
+			        "pudcodec: video2s needs frames (or --raw)\n");
 			return EXIT_FAILURE;
 		}
 	}
@@ -988,10 +1004,10 @@ static int mode_video2s(struct options *opt)
 		char ext[64];
 
 		snprintf(ext, sizeof(ext), ".%s.%s", pud_codec_name(opt->codec),
-			 want_header(opt) ? "h" : "bin");
-		pud_output_name(opt->raw_input != NULL ? opt->raw_input
-						       : opt->list[0],
-				ext, path_buf, sizeof(path_buf));
+		         want_header(opt) ? "h" : "bin");
+		pud_output_name(opt->raw_input != NULL ? opt->raw_input :
+		                                         opt->list[0],
+		                ext, path_buf, sizeof(path_buf));
 		output = path_buf;
 	}
 
@@ -1009,13 +1025,12 @@ static int mode_video2s(struct options *opt)
 	}
 
 	if (want_header(opt)) {
-		if (pud_write_video_header(fp, pud_codec_name(opt->codec),
-					   base_name,
-					   opt->codec == PUD_CODEC_LZ4
-						   ? "bands (LZ4 blocks)"
-						   : "frames",
-					   width, height, frames, sizes,
-					   count, total_raw) != 0) {
+		if (pud_write_video_header(
+		            fp, pud_codec_name(opt->codec), base_name,
+		            opt->codec == PUD_CODEC_LZ4 ? "bands (LZ4 blocks)" :
+		                                          "frames",
+		            width, height, frames, sizes, count,
+		            total_raw) != 0) {
 			fprintf(stderr, "pudcodec: header write failed\n");
 			goto done;
 		}

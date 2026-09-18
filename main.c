@@ -88,15 +88,15 @@ int main(void)
 		vreg_set_voltage(VREG_VOLTAGE_DEFAULT);
 
 	busy_wait_at_least_cycles(
-		(uint32_t)((SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US *
-			    (uint64_t)XOSC_HZ) /
-			   1000000));
+	        (uint32_t)((SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US *
+	                    (uint64_t)XOSC_HZ) /
+	                   1000000));
 
 	set_sys_clock_khz(CPU_SPEED_MHZ * 1000, true);
 	clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
-			CPU_SPEED_MHZ * MHZ, CPU_SPEED_MHZ * MHZ);
+	                CPU_SPEED_MHZ * MHZ, CPU_SPEED_MHZ * MHZ);
 	stdio_uart_init_full(debug_uart, DEBUG_UART_SPEED, DEBUG_UART_TX_PIN,
-			     DEBUG_UART_RX_PIN);
+	                     DEBUG_UART_RX_PIN);
 
 	printf("\n\n\nPICO USB Display\n");
 	printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
@@ -105,13 +105,13 @@ int main(void)
 
 	TaskHandle_t usb_handler;
 	xTaskCreate(usb_task_handler, "usb_task", 256, NULL,
-		    (tskIDLE_PRIORITY + 3), &usb_handler);
+	            (tskIDLE_PRIORITY + 3), &usb_handler);
 	vTaskCoreAffinitySet(usb_handler, (1 << 0));
 
 #if !INDEV_DRV_NOT_USED
 	TaskHandle_t indev_handler;
 	xTaskCreate(example_indev_read_task, "indev_read", 256, NULL,
-		    (tskIDLE_PRIORITY + 0), &indev_handler);
+	            (tskIDLE_PRIORITY + 0), &indev_handler);
 #endif
 
 	printf("calling freertos scheduler, %lld\n", time_us_64());

@@ -23,10 +23,9 @@
  *
  * Returns 0 on success.
  */
-int pud_write_codec_header(FILE *out, const char *codec,
-			   const char *array_name, const char *source_name,
-			   int width, int height, const uint8_t *data,
-			   size_t size, size_t raw_size);
+int pud_write_codec_header(FILE *out, const char *codec, const char *array_name,
+                           const char *source_name, int width, int height,
+                           const uint8_t *data, size_t size, size_t raw_size);
 
 /* Write a codec stream as a plain binary file.  Returns 0 on success. */
 int pud_write_binary(FILE *out, const uint8_t *data, size_t size);
@@ -41,9 +40,9 @@ int pud_write_binary(FILE *out, const uint8_t *data, size_t size);
  * success.
  */
 int pud_write_video_header(FILE *out, const char *codec, const char *base_name,
-			   const char *unit, int width, int height,
-			   uint8_t *const *blocks, const size_t *sizes,
-			   int count, size_t total_raw);
+                           const char *unit, int width, int height,
+                           uint8_t *const *blocks, const size_t *sizes,
+                           int count, size_t total_raw);
 
 /*
  * Write a block sequence as the binary container:
@@ -55,7 +54,7 @@ int pud_write_video_header(FILE *out, const char *codec, const char *base_name,
  * Returns 0 on success.
  */
 int pud_write_video_binary(FILE *out, uint8_t *const *blocks,
-			   const size_t *sizes, int count);
+                           const size_t *sizes, int count);
 
 /* Read a whole file into a malloc'd, NUL-terminated buffer.  NULL on error. */
 uint8_t *pud_read_file(const char *path, size_t *size);
@@ -68,7 +67,7 @@ void pud_array_name(const char *path, char *out, size_t out_size);
 
 /* "a/b/img.png" + ".qoi.h" -> "a/b/img.qoi.h" */
 void pud_output_name(const char *input, const char *ext, char *out,
-		     size_t out_size);
+                     size_t out_size);
 
 /*
  * Header parsing.  `suffix` is matched against the end of the define name, so
@@ -78,7 +77,7 @@ long pud_parse_define(const char *text, const char *suffix, long fallback);
 
 /* Same, for a string define such as _CODEC "qoi".  Returns 0 and fills `out`. */
 int pud_parse_define_str(const char *text, const char *suffix, char *out,
-			 size_t out_size);
+                         size_t out_size);
 
 /*
  * Extract the bytes of the last `const uint8_t ...[...] = { ... }` array in a
@@ -88,6 +87,6 @@ size_t pud_parse_codec_array(const char *text, uint8_t *out, size_t capacity);
 
 /* "solid 480x320: raw 307200 B -> 3638 B (1.2%)" */
 void pud_print_size_comparison(const char *label, size_t raw_bytes,
-			       size_t compressed_bytes);
+                               size_t compressed_bytes);
 
 #endif /* PUD_CODEC_UTILS_H */

@@ -28,25 +28,25 @@
 #include "config.h"
 #include "backlight.h"
 
-typedef unsigned char	u8;
-typedef unsigned short	u16;
-typedef unsigned int	u32;
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
 
-typedef signed char	s8;
-typedef signed short	s16;
-typedef signed int	s32;
+typedef signed char s8;
+typedef signed short s16;
+typedef signed int s32;
 
 /* Panel active area in mm, set by the build (see CMakeLists.txt).  0 means
  * "unknown", which the host reads as "leave the input resolution alone". */
 #ifndef PUD_PANEL_WIDTH_MM
-#define PUD_PANEL_WIDTH_MM	0
+#define PUD_PANEL_WIDTH_MM 0
 #endif
 #ifndef PUD_PANEL_HEIGHT_MM
-#define PUD_PANEL_HEIGHT_MM	0
+#define PUD_PANEL_HEIGHT_MM 0
 #endif
 
-#define PUD_CMD_GET_SN	0x01
-#define PUD_CMD_GET_CAPS	0x02
+#define PUD_CMD_GET_SN 0x01
+#define PUD_CMD_GET_CAPS 0x02
 
 /* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The
  * host needs frame_max to size the bands it splits a rectangle into: the same
@@ -58,25 +58,25 @@ typedef signed int	s32;
  * The panel parameters after decoder_type were appended later: a host that
  * asks for the first 16 bytes (2.0) still gets a valid answer, because the
  * device clamps its reply to the requested length. */
-#define PUD_CAPS_MAGIC	0x43445550 /* "PUDC" */
-#define PUD_PROTO_VER	2
+#define PUD_CAPS_MAGIC 0x43445550 /* "PUDC" */
+#define PUD_PROTO_VER 2
 
 struct pud_caps {
-	u32	magic;
-	u32	proto_ver;
-	u32	frame_max;	/* max bytes per EP1 transfer, header included */
-	u32	decoder_type;	/* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE */
+	u32 magic;
+	u32 proto_ver;
+	u32 frame_max; /* max bytes per EP1 transfer, header included */
+	u32 decoder_type; /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE */
 
-	u16	xres;		/* panel size in the frame it is driven in */
-	u16	yres;
-	u16	pixelclock_khz;	/* bus clock the panel is driven with */
-	u8	rotation;	/* TFT_ROTATION the firmware applied */
-	u8	bpp;
-	u8	intf_type;
-	u8	tp_polling_period; /* touch poll period, ms (0 when there is no touch) */
-	u16	width_mm;	/* active area, for the host's input resolution */
-	u16	height_mm;
-	u16	flags;		/* PUD_CAPS_*: what this build actually has */
+	u16 xres; /* panel size in the frame it is driven in */
+	u16 yres;
+	u16 pixelclock_khz; /* bus clock the panel is driven with */
+	u8 rotation; /* TFT_ROTATION the firmware applied */
+	u8 bpp;
+	u8 intf_type;
+	u8 tp_polling_period; /* touch poll period, ms (0 when there is no touch) */
+	u16 width_mm; /* active area, for the host's input resolution */
+	u16 height_mm;
+	u16 flags; /* PUD_CAPS_*: what this build actually has */
 };
 
 /*
@@ -84,7 +84,7 @@ struct pud_caps {
  * pico-display-lib set INDEV_DRV_NOT_USED=1 (no controller on the glass), and
  * the host must not register an input device for those.
  */
-#define PUD_CAPS_TOUCH	0x0001	/* an indev driver is compiled in and polled */
+#define PUD_CAPS_TOUCH 0x0001 /* an indev driver is compiled in and polled */
 
 /*
  * EP1 OUT framing (protocol v2).
@@ -104,36 +104,36 @@ struct pud_caps {
  * declares more than frame_max - PUD_EP1_HEADER_SIZE gets its endpoint stalled
  * instead of a truncated frame (g_ep1_stat_oversize).
  */
-#define PUD_EP1_HEADER_SIZE	12
+#define PUD_EP1_HEADER_SIZE 12
 
 struct pud_ep1_header {
-	u16	xs;
-	u16	ys;
-	u16	xe;
-	u16	ye;
-	u32	size;		/* payload bytes that follow */
+	u16 xs;
+	u16 ys;
+	u16 xe;
+	u16 ye;
+	u32 size; /* payload bytes that follow */
 };
 
 struct disp_data {
-	u16	xres;
-	u16	yres;
-	u8	rotation;
-	u32	pixelclock_khz;
-	u8	bpp;
-	u8	intf_type;
+	u16 xres;
+	u16 yres;
+	u8 rotation;
+	u32 pixelclock_khz;
+	u8 bpp;
+	u8 intf_type;
 	/* Active area in mm.  The host needs it to give the input device a
 	 * resolution (units/mm): libinput treats an absolute device without one
 	 * as a kernel bug, and Mutter uses the device size when it decides which
 	 * output a touchscreen belongs to. */
-	u16	width_mm;
-	u16	height_mm;
+	u16 width_mm;
+	u16 height_mm;
 };
 
 struct tp_data {
-	bool	is_pressed;
-	u16	x;
-	u16	y;
-	u8	polling_period;
+	bool is_pressed;
+	u16 x;
+	u16 y;
+	u8 polling_period;
 };
 
 /*
@@ -158,26 +158,26 @@ struct tp_data {
  * release; the host keeps an interrupt URB pending.  REQ_EP4_IN still exists
  * (and pulls the current report) for hosts that poll instead.
  */
-#define PUD_TOUCH_VERSION	1
-#define PUD_TOUCH_PRESSED	0x01
+#define PUD_TOUCH_VERSION 1
+#define PUD_TOUCH_PRESSED 0x01
 
 struct pud_touch_report {
-	u8	flags;
-	u8	x_hi;
-	u8	x_lo;
-	u8	y_hi;
-	u8	y_lo;
-	u8	seq;
-	u8	version;
-	u8	reserved;
+	u8 flags;
+	u8 x_hi;
+	u8 x_lo;
+	u8 y_hi;
+	u8 y_lo;
+	u8 seq;
+	u8 version;
+	u8 reserved;
 };
 
 struct pud_data {
-	u8	sn[8];
-	u16	cmd;
+	u8 sn[8];
+	u16 cmd;
 
-	struct disp_data	disp;
-	struct tp_data		tp;
+	struct disp_data disp;
+	struct tp_data tp;
 };
 
 extern struct pud_data g_pud_data;
@@ -203,5 +203,4 @@ void pud_set_rw_tp_polling_period(u8 *ptr, int len);
  * something to say.  Called from the indev task every polling_period ms. */
 void pud_touch_poll(void);
 
-
-#endif	/* __PUD_H */
+#endif /* __PUD_H */

@@ -28,7 +28,7 @@
 #include "decoder.h"
 #include "lz4.h"
 #include "usb.h"
-#include "pud.h"		/* PUD_EP1_HEADER_SIZE, the EP1 framing */
+#include "pud.h" /* PUD_EP1_HEADER_SIZE, the EP1 framing */
 #include "bootlogo.h"
 
 #include "pico/time.h"
@@ -36,7 +36,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
-
 
 struct jpegdec_data {
 	JPEGIMAGE img;
@@ -51,8 +50,7 @@ int draw_mcus(JPEGDRAW *pDraw)
 	 * garbage over the right edge of partial updates (skewed image).
 	 */
 	int iWidth = pDraw->iWidthUsed;
-	int iCount = iWidth * pDraw->iHeight *
-		     2; /* sizeof(*pDraw->pPixels) */
+	int iCount = iWidth * pDraw->iHeight * 2; /* sizeof(*pDraw->pPixels) */
 	int xs = pDraw->x;
 	int ys = pDraw->y;
 	int xe = pDraw->x + iWidth - 1;
@@ -63,7 +61,7 @@ int draw_mcus(JPEGDRAW *pDraw)
 }
 
 void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
-		     u32 jpeg_size)
+                     u32 jpeg_size)
 {
 	static struct jpegdec_data *jpegdec = &g_jpegdec;
 	int ret;
@@ -102,7 +100,8 @@ void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
  */
 #include "tjpgd.h"
 
-static uint8_t s_tjpgd_workspace[TJPGD_WORKSPACE_SIZE] __attribute__((aligned(4)));
+static uint8_t s_tjpgd_workspace[TJPGD_WORKSPACE_SIZE]
+        __attribute__((aligned(4)));
 
 /* Rows of blocks buffered before one flush; 8 rows x 480 px x 2 B = 7.5 KB.
  * The buffer is always indexed with the visible width as the row pitch, so a
@@ -114,10 +113,10 @@ struct tjpgd_ctx {
 	const u8 *data;
 	u32 size;
 	u32 index;
-	int16_t x, y;	/* where the image goes on the panel */
-	u16 width;	/* visible width of the image (row pitch of the buffer) */
-	u16 group;	/* row group currently buffered */
-	u16 group_rows;	/* how many rows of it are filled */
+	int16_t x, y; /* where the image goes on the panel */
+	u16 width; /* visible width of the image (row pitch of the buffer) */
+	u16 group; /* row group currently buffered */
+	u16 group_rows; /* how many rows of it are filled */
 	bool group_valid;
 };
 
@@ -152,8 +151,7 @@ static void tjpgd_flush_group(void)
 		rows = TFT_VER_RES - y;
 
 	tft_video_flush(s_tjpgd.x, y, s_tjpgd.x + s_tjpgd.width - 1,
-			y + rows - 1, s_tjpgd_rowbuf,
-			s_tjpgd.width * rows * 2);
+	                y + rows - 1, s_tjpgd_rowbuf, s_tjpgd.width * rows * 2);
 }
 
 static int tjpgd_output(JDEC *jdec, void *bitmap, JRECT *rect)
@@ -197,7 +195,7 @@ static int tjpgd_output(JDEC *jdec, void *bitmap, JRECT *rect)
 			s_tjpgd.group_rows = row0 + 1;
 	}
 
-	return 1;	/* continue decoding */
+	return 1; /* continue decoding */
 }
 
 void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
@@ -219,10 +217,10 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 	s_tjpgd.group_valid = false;
 
 	memset(&jdec, 0, sizeof(jdec));
-	jdec.swap = false;	/* JD_FORMAT 1 already gives panel byte order */
+	jdec.swap = false; /* JD_FORMAT 1 already gives panel byte order */
 
 	res = jd_prepare(&jdec, tjpgd_input, s_tjpgd_workspace,
-			 sizeof(s_tjpgd_workspace), NULL);
+	                 sizeof(s_tjpgd_workspace), NULL);
 	if (res != JDR_OK) {
 		printf("tjpgd: jd_prepare failed: %d\n", res);
 		return;
@@ -269,24 +267,38 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
  * known workload.
  */
 #if DECODER_STATS
-volatile u32 g_qoi_stat_draw_us;   /* whole qoi_drawimg() */
-volatile u32 g_qoi_stat_flush_us;  /* time inside tft_video_flush() */
-volatile u32 g_qoi_stat_pixels;    /* pixels flushed */
-volatile u32 g_qoi_stat_calls;     /* qoi_flush() calls */
-volatile u32 g_qoi_stat_frames;    /* qoi_drawimg() calls */
+volatile u32 g_qoi_stat_draw_us; /* whole qoi_drawimg() */
+volatile u32 g_qoi_stat_flush_us; /* time inside tft_video_flush() */
+volatile u32 g_qoi_stat_pixels; /* pixels flushed */
+volatile u32 g_qoi_stat_calls; /* qoi_flush() calls */
+volatile u32 g_qoi_stat_frames; /* qoi_drawimg() calls */
 
-#define STAT_T0()          u32 _stat_t0 = time_us_32()
-#define STAT_DRAW_ADD()    do { g_qoi_stat_draw_us += time_us_32() - _stat_t0; \
-				g_qoi_stat_frames++; } while (0)
-#define STAT_FLUSH_T0()    u32 _stat_ft0 = time_us_32()
-#define STAT_FLUSH_ADD(n)  do { \
+#define STAT_T0() u32 _stat_t0 = time_us_32()
+#define STAT_DRAW_ADD()                                        \
+	do {                                                   \
+		g_qoi_stat_draw_us += time_us_32() - _stat_t0; \
+		g_qoi_stat_frames++;                           \
+	} while (0)
+#define STAT_FLUSH_T0() u32 _stat_ft0 = time_us_32()
+#define STAT_FLUSH_ADD(n)                                        \
+	do {                                                     \
 		g_qoi_stat_flush_us += time_us_32() - _stat_ft0; \
-		g_qoi_stat_pixels += (n); g_qoi_stat_calls++; } while (0)
+		g_qoi_stat_pixels += (n);                        \
+		g_qoi_stat_calls++;                              \
+	} while (0)
 #else
-#define STAT_T0()          do { } while (0)
-#define STAT_DRAW_ADD()    do { } while (0)
-#define STAT_FLUSH_T0()    do { } while (0)
-#define STAT_FLUSH_ADD(n)  do { } while (0)
+#define STAT_T0() \
+	do {      \
+	} while (0)
+#define STAT_DRAW_ADD() \
+	do {            \
+	} while (0)
+#define STAT_FLUSH_T0() \
+	do {            \
+	} while (0)
+#define STAT_FLUSH_ADD(n) \
+	do {              \
+	} while (0)
 #endif
 
 /*
@@ -341,7 +353,7 @@ void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size)
 
 	STAT_T0();
 	got = LZ4_decompress_safe((const char *)lz4_data, (char *)lz4_band,
-				  (int)lz4_size, (int)raw);
+	                          (int)lz4_size, (int)raw);
 	if (got != (int)raw) {
 		g_decoder_stat_lz4_bad++;
 		return;
@@ -399,9 +411,8 @@ struct qoi_draw_ctx {
 	uint16_t oy;
 };
 
-static void qoi_flush(const uint16_t *pixels, size_t count,
-		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
-		      void *user_data)
+static void qoi_flush(const uint16_t *pixels, size_t count, uint16_t xs,
+                      uint16_t ys, uint16_t xe, uint16_t ye, void *user_data)
 {
 	struct qoi_draw_ctx *ctx = (struct qoi_draw_ctx *)user_data;
 
@@ -413,14 +424,12 @@ static void qoi_flush(const uint16_t *pixels, size_t count,
 	 * qoi_drawimg), which is what keeps the buffer reuse safe.
 	 */
 #if PUD_DECODER_PINGPONG
-	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
-			      ctx->ox + xe, ctx->oy + ye,
-			      (void *)pixels, count * 2);
+	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys, ctx->ox + xe,
+	                      ctx->oy + ye, (void *)pixels, count * 2);
 #else
 	/* one buffer: it has to be free before the decoder fills it again */
-	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
-			ctx->ox + xe, ctx->oy + ye,
-			(void *)pixels, count * 2);
+	tft_video_flush(ctx->ox + xs, ctx->oy + ys, ctx->ox + xe, ctx->oy + ye,
+	                (void *)pixels, count * 2);
 #endif
 	STAT_FLUSH_ADD(count);
 }
@@ -452,17 +461,18 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 
 		if (rect_px <= LZ4_BAND_PIXELS) {
 #if QOI_NONCALLBACK >= 2
-			uint16_t *buf = qoi_band + qoi_band_next * LZ4_BAND_PIXELS;
+			uint16_t *buf =
+			        qoi_band + qoi_band_next * LZ4_BAND_PIXELS;
 #else
 			uint16_t *buf = qoi_band;
 #endif
 
 			STAT_T0();
-			if (rgb565_qoi_decompress(qoi_data, qoi_size,
-						  buf, rect_px) == rect_px) {
+			if (rgb565_qoi_decompress(qoi_data, qoi_size, buf,
+			                          rect_px) == rect_px) {
 				STAT_FLUSH_T0();
-				tft_async_video_flush(xs, ys, xe, ye,
-						      buf, rect_px * 2);
+				tft_async_video_flush(xs, ys, xe, ye, buf,
+				                      rect_px * 2);
 				STAT_FLUSH_ADD(rect_px);
 #if QOI_NONCALLBACK >= 2
 				/* The next flush's window command waits for this
@@ -487,14 +497,13 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 		buf_cap = 480 * QOI_BUF_ROWS;
 
 	STAT_T0();
-	rgb565_qoi_decompress_callback(qoi_data, qoi_size, width,
-				       qoi_buf_a,
+	rgb565_qoi_decompress_callback(qoi_data, qoi_size, width, qoi_buf_a,
 #if PUD_DECODER_PINGPONG
-				       qoi_buf_b,
+	                               qoi_buf_b,
 #else
-				       NULL,
+	                               NULL,
 #endif
-				       buf_cap, qoi_flush, &ctx);
+	                               buf_cap, qoi_flush, &ctx);
 	/* the last batch is still in flight; the frame is not done until it lands */
 	tft_async_video_wait();
 	STAT_DRAW_ADD();
@@ -523,9 +532,8 @@ struct rle_draw_ctx {
 	uint16_t oy;
 };
 
-static void rle_flush(const uint16_t *pixels, size_t count,
-		      uint16_t xs, uint16_t ys, uint16_t xe, uint16_t ye,
-		      void *user_data)
+static void rle_flush(const uint16_t *pixels, size_t count, uint16_t xs,
+                      uint16_t ys, uint16_t xe, uint16_t ye, void *user_data)
 {
 	struct rle_draw_ctx *ctx = (struct rle_draw_ctx *)user_data;
 
@@ -533,14 +541,12 @@ static void rle_flush(const uint16_t *pixels, size_t count,
 	/* asynchronous, same contract as the QOI flush: the buffer may only be
 	 * reused once the next flush (or the wait below) has completed it. */
 #if PUD_DECODER_PINGPONG
-	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys,
-			      ctx->ox + xe, ctx->oy + ye,
-			      (void *)pixels, count * 2);
+	tft_async_video_flush(ctx->ox + xs, ctx->oy + ys, ctx->ox + xe,
+	                      ctx->oy + ye, (void *)pixels, count * 2);
 #else
 	/* one buffer: it has to be free before the decoder fills it again */
-	tft_video_flush(ctx->ox + xs, ctx->oy + ys,
-			ctx->ox + xe, ctx->oy + ye,
-			(void *)pixels, count * 2);
+	tft_video_flush(ctx->ox + xs, ctx->oy + ys, ctx->ox + xe, ctx->oy + ye,
+	                (void *)pixels, count * 2);
 #endif
 	STAT_FLUSH_ADD(count);
 }
@@ -563,14 +569,13 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
 		buf_cap = 480 * RLE_BUF_ROWS;
 
 	STAT_T0();
-	rgb565_rle_decompress_callback(rle_data, rle_size, width,
-				       rle_buf_a,
+	rgb565_rle_decompress_callback(rle_data, rle_size, width, rle_buf_a,
 #if PUD_DECODER_PINGPONG
-				       rle_buf_b,
+	                               rle_buf_b,
 #else
-				       NULL,
+	                               NULL,
 #endif
-				       buf_cap, rle_flush, &ctx);
+	                               buf_cap, rle_flush, &ctx);
 	/* the last batch is still in flight; the frame is not done until it lands */
 	tft_async_video_wait();
 	STAT_DRAW_ADD();
@@ -587,10 +592,10 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
 /* One slot has to hold any transfer the control stage accepts, so it is sized
  * by the same per-board constant as ep1_read_buffer (PUD_MAX_TRANSFER, see
  * usbd_vendor.h). */
-#define DECODER_FRAME_MAX   PUD_MAX_TRANSFER
+#define DECODER_FRAME_MAX PUD_MAX_TRANSFER
 
 _Static_assert(DECODER_FRAME_MAX >= PUD_MAX_TRANSFER,
-	       "a frame slot must be able to hold a whole EP1 transfer");
+               "a frame slot must be able to hold a whole EP1 transfer");
 
 struct decoder_frame {
 	u16 xs, ys, xe, ye;
@@ -628,7 +633,7 @@ bool decoder_slot_free(void)
 }
 
 void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
-			  u32 size)
+                          u32 size)
 {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	int i;
@@ -654,7 +659,7 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 			memcpy(s_frames[i].data, data, size);
 			s_frames[i].busy = 1;
 			xSemaphoreGiveFromISR(s_decoder_sem,
-					      &xHigherPriorityTaskWoken);
+			                      &xHigherPriorityTaskWoken);
 			break;
 		}
 	}
@@ -682,34 +687,34 @@ static void decoder_draw_bootlogo(void)
 #if DECODER_TYPE == DECODER_USE_LZ4
 	const u8 *p = (const u8 *)bootlogo;
 	u32 count = (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
-		   ((u32)p[3] << 24);
+	            ((u32)p[3] << 24);
 	u32 rows;
 	u32 i;
 
 	if (count == 0 || count > TFT_VER_RES || TFT_VER_RES % count != 0)
-		return;   /* not a container: nothing sane to draw */
+		return; /* not a container: nothing sane to draw */
 	rows = TFT_VER_RES / count;
 
 	for (i = 0; i < count; i++) {
 		const u8 *e = p + 4u + 4u * (i + 1u);
 		u32 start = (u32)p[4u + 4u * i] |
-			    ((u32)p[4u + 4u * i + 1u] << 8) |
-			    ((u32)p[4u + 4u * i + 2u] << 16) |
-			    ((u32)p[4u + 4u * i + 3u] << 24);
+		            ((u32)p[4u + 4u * i + 1u] << 8) |
+		            ((u32)p[4u + 4u * i + 2u] << 16) |
+		            ((u32)p[4u + 4u * i + 3u] << 24);
 		u32 end = (u32)e[0] | ((u32)e[1] << 8) | ((u32)e[2] << 16) |
-			  ((u32)e[3] << 24);
+		          ((u32)e[3] << 24);
 		u32 y = i * rows;
 
 		if (end <= start || end > sizeof(bootlogo))
 			break;
 		lz4_drawimg(0, (u16)y, TFT_HOR_RES - 1,
-			    (u16)(i + 1u == count ? TFT_VER_RES - 1
-						  : y + rows - 1),
-			    (u8 *)p + start, end - start);
+		            (u16)(i + 1u == count ? TFT_VER_RES - 1 :
+		                                    y + rows - 1),
+		            (u8 *)p + start, end - start);
 	}
 #else
 	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
-			(uint8_t *)bootlogo, sizeof(bootlogo));
+	                (uint8_t *)bootlogo, sizeof(bootlogo));
 #endif
 }
 
@@ -736,9 +741,9 @@ static void decoder_task(void *param)
 		for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 			if (s_frames[i].busy) {
 				decoder_drawimg(s_frames[i].xs, s_frames[i].ys,
-						s_frames[i].xe, s_frames[i].ye,
-						s_frames[i].data,
-						s_frames[i].size);
+				                s_frames[i].xe, s_frames[i].ye,
+				                s_frames[i].data,
+				                s_frames[i].size);
 				s_frames[i].busy = 0;
 				g_decoder_stat_drawn++;
 				/* A slot is free again: re-arm EP1 if the
@@ -765,6 +770,6 @@ void decoder_init(void)
 	 * scalars.  4 KB keeps ~6x margin over the worst case, which matters on
 	 * RP2040 (264 KB SRAM, and no PSPLIM stack guard on Cortex-M0+). */
 	xTaskCreate(decoder_task, "decoder_task", 1024, NULL,
-		    tskIDLE_PRIORITY + 1, NULL);
+	            tskIDLE_PRIORITY + 1, NULL);
 	printf("Decoder type: %s\n", decoder_names[DECODER_TYPE]);
 }

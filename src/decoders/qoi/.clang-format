@@ -1,0 +1,7 @@
+# Vendored code -- upstream repository rgb565-qoi.  It has to stay byte-identical
+# to the library the host tools and the kernel driver use, so nothing here may be
+# reformatted, by hand or by the editor's format-on-save.  A clang-format config
+# in the directory is what stops the latter.
+---
+DisableFormat: true
+...

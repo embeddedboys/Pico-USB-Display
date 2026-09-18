@@ -760,5 +760,15 @@ SpacesInParentheses: false
 SpacesInSquareBrackets: false
 Standard: Cpp03
 TabWidth: 8
-UseTab: Always
+# Deviation from the kernel's own file: it says "Always", which makes
+# clang-format align with tabs as well -- the visual result then depends on the
+# editor's tab width, and checkpatch's rule is tabs for indentation, spaces for
+# alignment.
+#
+# Note that clang-format does not repair comment bodies: with ReflowComments:
+# false, the lines following "/*" keep whatever indentation they already have,
+# so they have to be written by hand as one tab per level plus one space
+# ("\t * text", "\t */").  Formatting is a no-op on a wrong one, which is why
+# these are spelled out here.
+UseTab: ForIndentation
 ...

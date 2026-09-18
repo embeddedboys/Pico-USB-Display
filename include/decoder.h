@@ -28,46 +28,52 @@
 
 /* DECODER_TYPE values.  The numbering is part of the USB protocol (the device
  * reports it to the host through PUD_CMD_GET_CAPS), so do not renumber. */
-#define DECODER_USE_TJPGD   0
-#define DECODER_USE_JPEGDEC   1
-#define DECODER_USE_LZ4       2
-#define DECODER_USE_QOI       3
+#define DECODER_USE_TJPGD 0
+#define DECODER_USE_JPEGDEC 1
+#define DECODER_USE_LZ4 2
+#define DECODER_USE_QOI 3
 /* RGB565 RLE, the codec from the rgb565-rle library (see src/decoders/rle/).
  * Added after QOI, so it takes the next free number. */
-#define DECODER_USE_RLE       4
+#define DECODER_USE_RLE 4
 
 #ifndef DECODER_TYPE
-	#define DECODER_TYPE DECODER_USE_JPEGDEC
+#define DECODER_TYPE DECODER_USE_JPEGDEC
 #endif
 
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 
-
-extern void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
-extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size);
-extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_size);
-extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size);
-extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size);
+extern void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
+                          u32 jpeg_size);
+extern void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
+                            u32 jpeg_size);
+extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data,
+                        u32 lz4_size);
+extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data,
+                        u32 qoi_size);
+extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data,
+                        u32 rle_size);
 
 extern void decoder_init(void);
-extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye,
-				 const u8 *data, u32 size);
+extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
+                                 u32 size);
 extern bool decoder_slot_free(void);
 
 #if DECODER_TYPE == DECODER_USE_TJPGD
-	#define decoder_drawimg(xs, ys, xe, ye, b, l) tjpgd_drawimg(xs, ys, xe, ye, b, l)
+#define decoder_drawimg(xs, ys, xe, ye, b, l) \
+	tjpgd_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_JPEGDEC
-	#define decoder_drawimg(xs, ys, xe, ye, b, l) jpegdec_drawimg(xs, ys, xe, ye, b, l)
+#define decoder_drawimg(xs, ys, xe, ye, b, l) \
+	jpegdec_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_LZ4
-	#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
+#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_QOI
-	#define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
+#define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_RLE
-	#define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
+#define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
 #else
-	#error "Invalid decoder type selected"
+#error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */
 
 #endif /* __UDD_DECODER_H */

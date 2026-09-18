@@ -1,3 +1,7 @@
+// Kept in the style of the CherryUSB template this is a copy of: the option
+// values are aligned into a column, which the kernel .clang-format would take
+// apart.  Project-specific options are the ifdefs further down.
+// clang-format off
 /*
  * Copyright (c) 2022, sakumisu
  *

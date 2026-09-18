@@ -39,22 +39,22 @@ size_t pud_codec_max_size(int codec, int width, int height);
 
 /* Returns the stream size, 0 on failure. */
 size_t pud_codec_encode_rgb565(int codec, const uint16_t *pixels, size_t count,
-			       uint8_t *out, size_t capacity);
+                               uint8_t *out, size_t capacity);
 
 /* Returns the number of pixels written, 0 on failure. */
 size_t pud_codec_decode_rgb565(int codec, const uint8_t *in, size_t size,
-			       uint16_t *pixels, size_t capacity);
+                               uint16_t *pixels, size_t capacity);
 
 /* ---- JPEG ---------------------------------------------------------------- */
 
 /* `quality` is 1..100.  Returns the JPEG size, 0 on failure. */
-size_t pud_jpeg_encode(const uint8_t *rgb888, int width, int height, int quality,
-		       uint8_t *out, size_t capacity);
+size_t pud_jpeg_encode(const uint8_t *rgb888, int width, int height,
+                       int quality, uint8_t *out, size_t capacity);
 
 /* Returns a malloc'd RGB888 image, NULL on failure.  `width`/`height` are
  * filled in from the stream. */
 uint8_t *pud_jpeg_decode(const uint8_t *in, size_t size, int *width,
-			 int *height);
+                         int *height);
 
 /* ---- pixels -------------------------------------------------------------- */
 
@@ -64,9 +64,9 @@ void pud_rgb565_to_rgb888(uint16_t px, uint8_t *r, uint8_t *g, uint8_t *b);
 /* Nearest-neighbour scale of an RGBA8888 image (what stb_image hands us).
  * dw/dh <= 0 keeps the source size.  Caller frees. */
 uint16_t *pud_rgba_to_rgb565_scaled(const uint8_t *rgba, int sw, int sh, int dw,
-				    int dh);
+                                    int dh);
 uint8_t *pud_rgba_to_rgb888_scaled(const uint8_t *rgba, int sw, int sh, int dw,
-				   int dh);
+                                   int dh);
 
 /* Expand RGB565 to a malloc'd RGB888 image.  Caller frees. */
 uint8_t *pud_rgb565_to_rgb888_buf(const uint16_t *pixels, size_t count);
@@ -79,6 +79,6 @@ uint8_t *pud_load_image(const char *path, int *width, int *height);
 /* Write RGB888 as PNG/BMP/TGA/JPEG, picked from the path's extension.
  * `quality` is only used for JPEG.  Returns 0 on success. */
 int pud_write_image(const char *path, const uint8_t *rgb888, int width,
-		    int height, int quality);
+                    int height, int quality);
 
 #endif /* PUD_CODECS_H */

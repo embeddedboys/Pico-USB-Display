@@ -1,0 +1,6 @@
+# Vendored code -- upstream project tjpgd, see the LICENSE next to it.  Its own
+# style is not ours and there is no reason to diverge from it, so keep the editor
+# and clang-format out of the directory.
+---
+DisableFormat: true
+...
