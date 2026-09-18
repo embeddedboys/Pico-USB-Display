@@ -1,0 +1,85 @@
+{
+  // clangd is the language server here; CMake writes the compilation database
+  // it reads (CMAKE_EXPORT_COMPILE_COMMANDS in CMakeLists.txt, see .clangd), so
+  // the Microsoft C/C++ extension's own IntelliSense is switched off to keep the
+  // two from fighting.
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  "clangd.arguments": [
+    // The RP2350 build directory -- build it once before opening the editor, and
+    // keep this in step with CompilationDatabase in .clangd.
+    "--compile-commands-dir=${workspaceFolder}/build-pico2",
+    // Index the whole firmware (and the SDK parts it compiles) in the
+    // background -- without it, "go to definition" only ever finds the
+    // declaration in a header, never the implementation in the .c file.
+    "--background-index",
+    "--background-index-priority=normal",
+    // The commands in the database invoke the cross compiler; let clangd ask it
+    // for its builtin include paths instead of guessing.
+    "--query-driver=**/arm-none-eabi-*",
+    // No #include ever gets inserted behind our back, and the argument
+    // placeholders stay.
+    "--header-insertion=never",
+    "--header-insertion-decorators=0",
+    "--function-arg-placeholders=1",
+    "--all-scopes-completion",
+    "--completion-style=detailed",
+    "--pch-storage=memory",
+    // .clangd tells clangd where the database is; --clang-tidy surfaces the
+    // kernel-ish warnings in the editor.
+    "--clang-tidy",
+    "--limit-results=100"
+  ],
+
+  "clangd.onConfigChanged": "restart",
+  "clangd.detectExtensionConflicts": true,
+
+  // Kernel style is tabs, eight columns wide (.clang-format). That is an editor
+  // setting, not something clang-format can impose: without this VS Code keeps
+  // its own default of 4 and "detectIndentation" re-guesses per file. Spelled
+  // out for C as well, so a language-specific user setting cannot win.
+  "editor.tabSize": 8,
+  "editor.indentSize": "tabSize",
+  "editor.insertSpaces": false,
+  "editor.detectIndentation": false,
+  "editor.rulers": [80],
+  "[c]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+    "editor.tabSize": 8,
+    "editor.indentSize": "tabSize",
+    "editor.insertSpaces": false,
+    "editor.detectIndentation": false
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+    "editor.tabSize": 8,
+    "editor.indentSize": "tabSize",
+    "editor.insertSpaces": false,
+    "editor.detectIndentation": false
+  },
+
+  // Build output is noise in the explorer and the pickers.  The build
+  // directories stay visible -- the .uf2 one flashes lives there.
+  "files.exclude": {
+    "**/*.o": true,
+    "**/*.d": true,
+    "**/*.elf": true,
+    "**/*.elf.map": true,
+    "**/*.dis": true
+  },
+  "search.exclude": {
+    "build": true,
+    "build-pico": true,
+    "build-pico2": true,
+    "compile_commands.json": true,
+    "tools/build": true
+  },
+
+  // The tree is kernel-formatted, so saving reformats with clang-format (which
+  // reads the nearest .clang-format); trailing whitespace stays, because kernel
+  // style does not strip it.  Vendored and generated files carry
+  // "clang-format off" or a DisableFormat config of their own.
+  "editor.formatOnSave": true,
+  "files.trimTrailingWhitespace": false,
+  "files.insertFinalNewline": true
+}

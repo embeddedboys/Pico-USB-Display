@@ -66,6 +66,25 @@ CMake 还提供了 `flash` 目标（`CMakeLists.txt` 第 137 行起，按板子�
 或 `target/rp2350.cfg`），但它要求 **openocd 与构建在同一台机器上**。
 本项目 OpenOCD 跑在 Windows 宿主机，因此改用下面的 gdb 方式。
 
+## 编辑器 / clangd
+
+`.clang-format`、`.clangd`、`.vscode/`、`.editorconfig` 都在仓库根，开箱可用 ——
+**前提是先构建过一次**：`compile_commands.json` 由 CMake 写进构建目录
+（`CMakeLists.txt` 已设 `CMAKE_EXPORT_COMPILE_COMMANDS ON`）。
+
+- `.clangd` 里的 `CompilationDatabase: build-pico2` 指向它，`.vscode/settings.json`
+  的 `--compile-commands-dir` 同理；换构建目录（RP2040 的 `build/`）要一起改。
+- 编译命令调用的是 `arm-none-eabi-gcc`，clangd 得向它索取内建头文件路径，否则会
+  报找不到 `stdint.h`：VS Code 已传 `--query-driver=**/arm-none-eabi-*`；命令行单跑用
+  `clangd --check=src/pud.c --query-driver=/usr/bin/arm-none-eabi-*`
+  （结尾的 `All checks completed, 0 errors` 就是通过）。
+- 风格是**内核风格**（tab + 8 宽，`.clang-format` 取自内核，唯一偏离是
+  `UseTab: ForIndentation`），保存即格式化。**vendored 与生成的代码不吃这套**：
+  `src/decoders/{qoi,rle,jpegdec,tjpgd}/` 各放一份 `DisableFormat: true` 的
+  `.clang-format`；`include/bootlogo.h`、`tools/stb_*.h`、`FreeRTOSConfig.h`、
+  `src/cherryusb/usb_config.h` 里写了 `// clang-format off` —— 后两个是为了保住
+  `#define` 选项的列对齐，前两个分别是生成文件和 vendored 文件。
+
 ## 烧录（CMSIS-DAP / OpenOCD + gdb）
 
 先在 **Windows 宿主机**启动 OpenOCD（WSL 里看不到调试器和 USB 设备）：

@@ -1,0 +1,37 @@
+# Editor style for this repository: the kernel style that .clang-format encodes
+# is tabs, eight columns wide. Editors read this directly (VS Code needs the
+# EditorConfig extension, see .vscode/extensions.json).
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+# Keep trailing whitespace as it is: kernel code does not strip it.
+trim_trailing_whitespace = false
+
+# ...except where tabs would be wrong or unusual.  Python is the strict one:
+# a tab there is a syntax error, not a style choice.
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,md}]
+indent_style = space
+indent_size = 2
+
+# CMake, and the build files under src/ and configs/, are space-indented.
+[CMakeLists.txt]
+indent_style = space
+indent_size = 4
+
+[*.cmake]
+indent_style = space
+indent_size = 4
+
+[Makefile]
+indent_style = tab

@@ -5,3 +5,4 @@ build
 __pycache__
 .venv
 tools/build
+compile_commands.json

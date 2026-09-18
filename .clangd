@@ -1,0 +1,17 @@
+# clangd / editor support for the firmware.
+#
+# CMake writes compile_commands.json -- CMakeLists.txt sets
+# CMAKE_EXPORT_COMPILE_COMMANDS -- into the build directory, so clangd only has
+# to be told which one to read.  build-pico2/ is the RP2350 target the firmware
+# is actually flashed from (see notes/build-and-flash.md); build a first time
+# before starting the editor, or there is no database to find.
+#
+# The recorded commands invoke arm-none-eabi-gcc, so give clangd that compiler's
+# builtin include paths as well -- start it as
+#
+#     clangd --query-driver=/usr/bin/arm-none-eabi-*
+#
+# (VS Code passes it for you, see .vscode/settings.json) if diagnostics about
+# missing headers such as stdint.h show up.
+CompileFlags:
+  CompilationDatabase: build-pico2

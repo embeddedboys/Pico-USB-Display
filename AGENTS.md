@@ -149,7 +149,21 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 
 ## 代码约定
 
-- C 风格见 `.clang-format`；`u8/u16/u32` 是本仓库的类型别名。
+- C 风格用**内核风格：tab + 8 宽缩进**（仓库根的 `.clang-format` 取自内核，唯一偏离是
+  `UseTab: ForIndentation`，理由写在文件里）；`u8/u16/u32` 是本仓库的类型别名。
+  自有代码已整体按它格式化过，保存即格式化（`.vscode/` + `.editorconfig` 把 tab 宽度也
+  钉成 8，否则显示会歪）。**以下不吃这套**，改它们前先看清楚：
+  - `src/decoders/{qoi,rle,jpegdec,tjpgd}/`：vendored，必须与上游逐字节一致 ——
+    各目录放了一份 `DisableFormat: true` 的 `.clang-format` 挡住格式化。
+  - `include/bootlogo.h`（生成的大数组，见"架构不变量"第 8 条）、`tools/stb_*.h`：
+    文件头 `// clang-format off`。
+  - `FreeRTOSConfig.h`、`src/cherryusb/usb_config.h`：`#define` 选项是列对齐的表，
+    格式化会拆散，同样 `// clang-format off`。
+- **编辑器开箱可用**：`.clangd` 指向 CMake 写在 `build-pico2/` 的
+  `compile_commands.json`（`CMAKE_EXPORT_COMPILE_COMMANDS ON`），clangd 需要
+  `--query-driver` 才能拿到 `arm-none-eabi-gcc` 的内建头文件路径
+  （VS Code 已配好）。**先构建一次**再开编辑器，详见
+  [build-and-flash.md](notes/build-and-flash.md) 的"编辑器 / clangd"一节。
 - 新增源文件/目录要加进对应的 `CMakeLists.txt`（`PUD_SOURCES` 或子目录）。
 - **调试打印要算代价**：115200 波特下每行约 1~3 ms，
   **不要放进每帧路径**。已知例子：EP2 查询路径的 `usb_hexdump` + `USB_LOG_WRN`
