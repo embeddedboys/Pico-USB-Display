@@ -314,10 +314,14 @@ static SemaphoreHandle_t s_decoder_sem;
 
 /* Diagnostics, readable from a debugger: frames seen / dropped / drawn.
  * A non-zero drop count means the host is outrunning the decoder and some
- * partial updates never reach the panel (visible as stale regions). */
+ * partial updates never reach the panel (visible as stale regions).
+ * `oversize` counts transfers that did not fit a frame slot: the control
+ * stage (see usbd_vendor_ep1_size_ok) is supposed to refuse those first, so a
+ * non-zero value means device and host disagree about the frame size. */
 volatile u32 g_decoder_stat_submitted;
 volatile u32 g_decoder_stat_dropped;
 volatile u32 g_decoder_stat_drawn;
+volatile u32 g_decoder_stat_oversize;
 
 /* True when at least one frame slot is idle, i.e. the USB stack may arm
  * EP1 for the next frame.  Used for EP1 flow control (see usb.h). */
@@ -339,8 +343,14 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	int i;
 
-	if (size > DECODER_FRAME_MAX)
-		size = DECODER_FRAME_MAX;
+	/* Drop rather than truncate.  The old code clamped the size and decoded
+	 * a truncated stream, which corrupted the image with no error visible
+	 * anywhere.  The control stage refuses oversized transfers first, so
+	 * this is a last line of defence. */
+	if (size > DECODER_FRAME_MAX) {
+		g_decoder_stat_oversize++;
+		return;
+	}
 
 	g_decoder_stat_submitted++;
 

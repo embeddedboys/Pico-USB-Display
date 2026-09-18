@@ -67,6 +67,13 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 		// usb_hexdump(*data, *len);
 		req_ep1_out = (struct req_ep1_out *)*data;
 
+		/* Reject before touching any state: the declared size becomes the
+		 * EP1 read length.  Returning -1 stalls EP0, so an oversized
+		 * request fails fast on the host side instead of overflowing
+		 * ep1_read_buffer or hanging the bulk transfer. */
+		if (!usbd_vendor_ep1_size_ok(req_ep1_out->size))
+			return -1;
+
 		decoder_set_window(req_ep1_out->xs, req_ep1_out->ys,
 				   req_ep1_out->xe, req_ep1_out->ye);
 
@@ -90,9 +97,13 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 		req_ep2_in = (struct req_ep2_in *)*data;
 		USB_LOG_WRN("cmd: %d, size: %d\n", req_ep2_in->cmd,
 			    req_ep2_in->size);
-		usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd, req_ep2_in->size);
-		return usbd_ep_start_write(busid, EP2_IN_ADDR, ep2_write_buffer,
-					   req_ep2_in->size);
+		/* The fsm returns how much it actually produced: writing the
+		 * host's requested size instead would leak stale bytes out of
+		 * ep2_write_buffer for a command with a short answer. */
+		return usbd_ep_start_write(
+			busid, EP2_IN_ADDR, ep2_write_buffer,
+			usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd,
+						    req_ep2_in->size));
 	case REQ_EP4_IN:
 		return usbd_ep_start_write(busid, EP4_IN_ADDR, ep4_write_buffer,
 					   64);

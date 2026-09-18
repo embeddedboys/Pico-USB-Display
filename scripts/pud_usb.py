@@ -64,9 +64,18 @@ REQ_EP2_IN = 0x03
 REQ_EP4_IN = 0x05
 
 CMD_GET_SN = 0x01
+CMD_GET_CAPS = 0x02
+
+#: Device capability report (``PUD_CMD_GET_CAPS``): magic, protocol version,
+#: the largest single EP1 transfer the device accepts, and its active decoder.
+#: Kept in sync with ``struct pud_caps`` in the firmware and the driver.
+CAPS_MAGIC = 0x43445550  # "PUDC"
+CAPS_STRUCT = struct.Struct("<IIII")
 
 #: Largest payload the firmware accepts in one transfer (its frame slot is
 #: 64 KiB, and the protocol carries the length in a 16-bit field).
+#: This is the *host* ceiling; the device reports its own through
+#: ``Display.frame_max`` and the smaller of the two wins.
 USB_TRANS_MAX_SIZE = 65535
 
 #: A transfer is decoded as one self-contained QOI image, so a rectangle is
@@ -409,7 +418,13 @@ def open_device():
                 "holds the DRM card -- reboot without loading the driver.")
         raise PudError("cannot claim the interface: %s" % exc)
 
-    return Display(dev)
+    disp = Display(dev)
+    # Not fatal: an older firmware simply keeps the host-side defaults.
+    try:
+        disp.query_caps()
+    except Exception:
+        pass
+    return disp
 
 
 class Display:
@@ -424,6 +439,15 @@ class Display:
         self.util = usb.util
         self.width = width
         self.height = height
+
+        # Device-reported limits; defaults are the host-side ceiling and are
+        # replaced by query_caps().  An RP2040 firmware (half the SRAM) accepts
+        # half-size transfers, so anything that bands a rectangle must use
+        # band_pixels rather than the module constant.
+        self.caps = None
+        self.frame_max = USB_TRANS_MAX_SIZE
+        self.band_pixels = PUD_MAX_BAND_PIXELS
+        self.decoder_type = None
 
     # -- lifecycle --------------------------------------------------------
     def close(self):
@@ -459,9 +483,11 @@ class Display:
         not QOI, and by anything that wants full control over the stream.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        if len(payload) > USB_TRANS_MAX_SIZE:
-            raise PudError("%d byte payload exceeds the %d byte transfer limit"
-                           % (len(payload), USB_TRANS_MAX_SIZE))
+        limit = min(USB_TRANS_MAX_SIZE, self.frame_max)
+        if len(payload) > limit:
+            raise PudError(
+                "%d byte payload exceeds the %d byte limit this device accepts"
+                % (len(payload), limit))
         self._check_rect(xs, ys, xe, ye)
         self._window(xs, ys, xe, ye, len(payload))
         t0 = time.perf_counter()
@@ -475,7 +501,8 @@ class Display:
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
         self._check_rect(xs, ys, xs + width - 1, ys + height - 1)
-        rows = max(1, PUD_MAX_BAND_PIXELS // width)
+        rows = max(1, self.band_pixels // width)
+        limit = min(USB_TRANS_MAX_SIZE, self.frame_max)
         total = 0
         bands = 0
         t0 = time.perf_counter()
@@ -485,9 +512,9 @@ class Display:
             start = y * width * 2
             band = rgb565[start:start + bh * width * 2]
             payload = qoi_encode(band)
-            if len(payload) > USB_TRANS_MAX_SIZE:
-                raise PudError("band of %d bytes exceeds the transfer limit"
-                               % len(payload))
+            if len(payload) > limit:
+                raise PudError("band of %d bytes exceeds the %d byte limit"
+                               % (len(payload), limit))
             self._window(xs, ys + y, xs + width - 1, ys + y + bh - 1,
                          len(payload))
             self.dev.write(EP1_OUT_ADDR, payload, timeout=timeout)
@@ -505,6 +532,34 @@ class Display:
             TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
             struct.pack("<HH", CMD_GET_SN, 8))
         return bytes(self.dev.read(EP2_IN_ADDR, 8, timeout=DEFAULT_TIMEOUT_MS))
+
+    def query_caps(self, timeout=None):
+        """Ask the device what it accepts (``PUD_CMD_GET_CAPS``).
+
+        Updates ``frame_max``, ``band_pixels`` and ``decoder_type``.  A device
+        without the command answers with whatever was left in its buffer, so
+        the magic (not the transfer length) is what decides; on any mismatch the
+        conservative defaults are kept and None is returned.
+        """
+        timeout = timeout or DEFAULT_TIMEOUT_MS
+        self.dev.ctrl_transfer(
+            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
+            struct.pack("<HH", CMD_GET_CAPS, CAPS_STRUCT.size))
+        raw = bytes(self.dev.read(EP2_IN_ADDR, CAPS_STRUCT.size,
+                                  timeout=timeout))
+        if len(raw) < CAPS_STRUCT.size:
+            return None
+        magic, proto_ver, frame_max, decoder_type = CAPS_STRUCT.unpack(raw)
+        if magic != CAPS_MAGIC or not (0 < frame_max <= (1 << 20)):
+            return None
+
+        self.caps = dict(proto_ver=proto_ver, frame_max=frame_max,
+                         decoder_type=decoder_type)
+        self.frame_max = min(USB_TRANS_MAX_SIZE, frame_max)
+        if self.frame_max > 16:
+            self.band_pixels = max(1, (self.frame_max - 16) // 3)
+        self.decoder_type = decoder_type
+        return self.caps
 
 
 # ---------------------------------------------------------------------------

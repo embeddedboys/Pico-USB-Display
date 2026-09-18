@@ -37,7 +37,23 @@ typedef signed char	s8;
 typedef signed short	s16;
 typedef signed int	s32;
 
-#define pud_CMD_GET_SN	0x01
+#define PUD_CMD_GET_SN	0x01
+#define PUD_CMD_GET_CAPS	0x02
+
+/* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The
+ * host needs frame_max to size the bands it splits a rectangle into: the same
+ * number sizes ep1_read_buffer and the decoder frame slot on the device side
+ * (PUD_MAX_TRANSFER, see usbd_vendor.h) and it differs per board (RP2040 has
+ * half the SRAM).  Keep this struct in sync with the driver's pud.h. */
+#define PUD_CAPS_MAGIC	0x43445550 /* "PUDC" */
+#define PUD_PROTO_VER	1
+
+struct pud_caps {
+	u32	magic;
+	u32	proto_ver;
+	u32	frame_max;	/* max bytes the device accepts in one EP1 transfer */
+	u32	decoder_type;	/* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI */
+};
 
 struct disp_data {
 	u16	xres;

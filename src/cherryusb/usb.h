@@ -11,7 +11,9 @@
 void usb_device_init(void);
 bool usb_is_configured(void);
 
-void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
+/* Fills ep2_write_buffer for one query; returns the number of bytes the caller
+ * must send on EP2 (never more than the host asked for). */
+uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
 
 /* EP1 flow control.
  *
@@ -24,5 +26,9 @@ void usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
 void usbd_vendor_ep1_arm(uint32_t size);
 void usbd_vendor_ep1_defer(uint32_t size);
 void usbd_vendor_ep1_tick(void);
+
+/* True when a host-declared transfer length fits ep1_read_buffer.  Called from
+ * the REQ_EP1_OUT control stage, which stalls EP0 when it returns false. */
+bool usbd_vendor_ep1_size_ok(uint32_t size);
 
 #endif /* __USB_H */
