@@ -48,13 +48,15 @@ set(INDEV_POLLING_PERIOD_MS 10)
 
 # Panel active area in mm, reported to the host so it can give the input device
 # a resolution in units/mm -- libinput treats an absolute device without one as
-# a kernel bug, and Mutter matches the device size against the outputs when it
-# decides where a touchscreen belongs. 3.5" 480x320 module: 3.5 in = 88.9 mm
-# diagonal at 3:2 -> about 74 x 49 mm of active area. This only scales the
-# reported device size (and calibration), never a coordinate, so a rough value
-# is harmless -- measure the glass if the exact number ever matters.
-set(PUD_PANEL_WIDTH_MM  74)
-set(PUD_PANEL_HEIGHT_MM 49)
+# a kernel bug -- and so a compositor can tell which output the touchscreen
+# belongs to.  Mutter compares the size the input device's (integer!) resolution
+# implies against the output's EDID size, which EDID only stores in whole
+# centimeters, and wants them within 5%.  70x40 is a pair where both work out:
+# the resolution becomes 7 and 8 units/mm, which reads back as 68.6x40 mm, and
+# the EDID says 7x4 cm.  The 3.5" glass is closer to 74x49; the reported number
+# only affects the device size and DPI estimates, never a coordinate.
+set(PUD_PANEL_WIDTH_MM  70)
+set(PUD_PANEL_HEIGHT_MM 40)
 
 # Run the board config's overclock profile 1: RP2350 at 225 MHz with a 75 MHz
 # QSPI clock and the default 1.10V core voltage (the library's recommended,
