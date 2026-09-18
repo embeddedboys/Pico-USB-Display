@@ -75,6 +75,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
+| `touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
 | `lz4_img_viewer.py` | 同上，LZ4 专用名字（需 `DECODER_TYPE=2`）；**分带**由 `pud_usb` 负责 | lz4 |
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
@@ -118,6 +119,22 @@ python3 scripts/xorg_desktop_share.py --fps 15 --stats
 
 结论：**局刷由 USB 带宽决定**（`fps ≈ 1.05e6 / 每帧字节数`）；**全刷由面板写入决定**
 （153600 像素固定约 36 ms ≈ 4.3 Mpx/s），只有单帧压缩后超过约 40 KB 才转为 USB 受限。
+
+## 触摸（`touch_test.py`）
+
+```bash
+python3 scripts/touch_test.py                    # 推送模式，听 10 s，边摸边打印
+python3 scripts/touch_test.py --mode poll        # REQ_EP4_IN 轮询模型
+python3 scripts/touch_test.py --calibrate        # 另给触摸包围盒，判断轴序/反向
+```
+
+设备主动推送 8 字节报告（布局见 [usb-protocol.md](usb-protocol.md)），所以主机只是
+不断读 EP4；`--mode poll` 用 `REQ_EP4_IN` 每次取一帧，用来对比两种模型。
+汇总会打印报告数、x/y 范围、报告间隔中位数、sequence 跳变（推送模式下即被合并/漏掉的
+样本数）。空闲时读会超时，这是正常的（设备不发声）。
+
+`pud_usb.py` 里有 `parse_touch_report()`、`Display.touch_request()`、
+`Display.read_touch()`，新脚本请复用。
 
 ## 桌面负载下的编解码器比较（`desktop_codecs.py`）
 

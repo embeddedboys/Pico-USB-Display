@@ -89,6 +89,13 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    **主机必须按 `PUD_CMD_GET_CAPS` 上报的 `band_pixels` 分带**，一个传输一个自包含 block。
    放不下或解码长度与窗口不符就计数丢弃（`g_decoder_stat_lz4_*`），**不要截断**。
    整帧 307200 B 的 block 永远解不了 —— 旧实现每帧 `malloc` 308 KB 就是这么坏的。
+10. **触摸坐标只有一处变换**：各触摸驱动（ft6236/gt911/cst816d/tsc2007）只返回**控制器
+    原始值**，轴序/反向/偏移/钳位全在 `pico-display-lib` 的 `indev.c` 里按
+    `indev_dir_for_rotation(TFT_ROTATION)` 做 —— 触摸和显示共用同一个 `TFT_ROTATION`，
+    不要再往驱动里塞 `set_dir()` 常量（改前就是这样，结果旋转不跟着走，而且
+    `set_dir()` 调用两次会把轴序转回去）。
+    EP4 的上报布局（8 字节，`include/pud.h` 的 `struct pud_touch_report`）是**协议字段**，
+    改它要同步驱动仓的 `notes/usb-protocol.md`。
 
 ## 当前配置（改前先读 notes）
 

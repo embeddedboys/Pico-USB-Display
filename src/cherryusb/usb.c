@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "pud.h"
 #include "usb.h"
 #include "decoder.h"
@@ -141,17 +143,80 @@ void usbd_vendor_ep2_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 	// USB_LOG_INFO("%s, cmd : %02x, len : %d\n", __func__, cmd, nbytes);
 }
 
+/*
+ * EP4: touch reports.
+ *
+ * The device pushes one report per touch poll and the host keeps an interrupt
+ * URB pending, so there is no per-sample handshake that can be lost -- the
+ * first version armed the endpoint from a control request and a single failed
+ * URB left the driver's input dead.  A report that arrives while the previous
+ * one is still in flight replaces it: the host only needs the latest state, and
+ * queueing stale samples would only add latency.
+ */
+static struct pud_touch_report s_ep4_report;
+static volatile bool s_ep4_busy;	/* transfer in flight */
+static volatile bool s_ep4_dirty;	/* a newer report arrived meanwhile */
+
+static int usbd_vendor_ep4_arm(void)
+{
+	int rc;
+
+	memcpy(ep4_write_buffer, &s_ep4_report, sizeof(s_ep4_report));
+	s_ep4_dirty = false;
+	s_ep4_busy = true;
+
+	rc = usbd_ep_start_write(0, EP4_IN_ADDR, ep4_write_buffer,
+				 sizeof(s_ep4_report));
+	if (rc < 0)
+		s_ep4_busy = false;
+
+	return rc;
+}
+
+int usbd_vendor_ep4_submit(const struct pud_touch_report *report)
+{
+	if (report == NULL)
+		return -1;
+
+	s_ep4_report = *report;
+
+	if (s_ep4_busy) {
+		/* the host has not taken the previous one yet; the next
+		 * completion re-arms with this one */
+		s_ep4_dirty = true;
+		return 0;
+	}
+
+	return usbd_vendor_ep4_arm();
+}
+
+int usbd_vendor_ep4_request(void)
+{
+	if (s_ep4_busy)
+		return 0;	/* already on its way to the host */
+
+	return usbd_vendor_ep4_arm();
+}
+
+void usbd_vendor_ep4_reset(void)
+{
+	s_ep4_busy = false;
+	s_ep4_dirty = false;
+	memset(&s_ep4_report, 0, sizeof(s_ep4_report));
+	s_ep4_report.version = PUD_TOUCH_VERSION;
+}
+
 void usbd_vendor_ep4_int_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
-	// USB_LOG_RAW("%s, len:%d\r\n", __func__, nbytes);
-	// static struct tp_data *tp = &g_udd_data.tp;
-	// uint8_t *buf = ep4_write_buffer;
+	(void)busid;
+	(void)ep;
+	(void)nbytes;
 
-	// buf[0] = tp->is_pressed;
-	// buf[1] = tp->x >> 8;
-	// buf[2] = tp->x & 0xFF;
-	// buf[3] = tp->y >> 8;
-	// buf[4] = tp->y & 0xFF;
+	s_ep4_busy = false;
+
+	/* a sample arrived while this one was in flight: send the newer one */
+	if (s_ep4_dirty)
+		usbd_vendor_ep4_arm();
 }
 
 struct usbd_endpoint vendor_out_ep1 = {
@@ -174,6 +239,10 @@ struct usbd_interface intf0;
 void usb_device_init()
 {
 	USB_LOG_WRN("%s\n", __func__);
+
+	/* so a host can tell "touch is implemented" (version != 0) before
+	 * anybody has touched the panel */
+	usbd_vendor_ep4_reset();
 
 	usbd_desc_register(0, &xxx_vendor_descriptor);
 

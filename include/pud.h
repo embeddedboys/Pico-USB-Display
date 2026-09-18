@@ -71,6 +71,42 @@ struct tp_data {
 	u8	polling_period;
 };
 
+/*
+ * EP4 touch report, one per interrupt IN transfer (see notes/usb-protocol.md).
+ *
+ * The layout is byte-explicit on purpose: no multi-byte fields, so neither end
+ * depends on alignment or packing rules, and the first five bytes are the ones
+ * the driver parsed before the device actually reported anything (flags,
+ * big-endian x/y).  A device that has never been touched answers with an
+ * all-zero report, which reads as "not pressed".
+ *
+ *   0  flags      bit0 = pressed
+ *   1  x >> 8     panel coordinates in the frame the panel is driven in
+ *   2  x & 0xff
+ *   3  y >> 8     0..TFT_VER_RES-1
+ *   4  y & 0xff
+ *   5  sequence   wraps; a jump means the host missed (coalesced) a report
+ *   6  version    PUD_TOUCH_VERSION, so a host can tell touch is implemented
+ *   7  reserved   0
+ *
+ * The device pushes a report per poll while the panel is held, plus one on
+ * release; the host keeps an interrupt URB pending.  REQ_EP4_IN still exists
+ * (and pulls the current report) for hosts that poll instead.
+ */
+#define PUD_TOUCH_VERSION	1
+#define PUD_TOUCH_PRESSED	0x01
+
+struct pud_touch_report {
+	u8	flags;
+	u8	x_hi;
+	u8	x_lo;
+	u8	y_hi;
+	u8	y_lo;
+	u8	seq;
+	u8	version;
+	u8	reserved;
+};
+
 struct jpegdec_data {
 	JPEGIMAGE	img;
 	u8		options;
@@ -108,6 +144,10 @@ void pud_get_ro_disp_intf_type(u8 *ptr, int len);
 
 void pud_get_rw_tp_polling_period(u8 *ptr, int len);
 void pud_set_rw_tp_polling_period(u8 *ptr, int len);
+
+/* One touch poll: refresh g_pud_data.tp and push an EP4 report if there is
+ * something to say.  Called from the indev task every polling_period ms. */
+void pud_touch_poll(void);
 
 
 #endif	/* __PUD_H */

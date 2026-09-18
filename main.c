@@ -49,16 +49,18 @@ void vApplicationTickHook()
 }
 
 #if !INDEV_DRV_NOT_USED
+/*
+ * Touch polling.  There is deliberately no printf here: at 115200 baud a line
+ * costs 1-3 ms, the poll period is 33 ms, and the coordinates are what EP4 is
+ * for -- scripts/touch_test.py on the host shows them.
+ */
 portTASK_FUNCTION(example_indev_read_task, pvParameters)
 {
 	indev_driver_init();
 
 	for (;;) {
-		if (indev_is_pressed())
-			printf("pressed at (%d, %d)\n", indev_read_x(),
-			       indev_read_y());
-
-		vTaskDelay(pdMS_TO_TICKS(INDEV_POLLING_PERIOD_MS));
+		pud_touch_poll();
+		vTaskDelay(pdMS_TO_TICKS(g_pud_data.tp.polling_period));
 	}
 
 	vTaskDelete(NULL);

@@ -132,6 +132,60 @@ static void pud_config_init(void)
 	data->tp.polling_period = INDEV_POLLING_PERIOD_MS;
 }
 
+/*
+ * One touch poll.
+ *
+ * Keeps g_pud_data.tp current and pushes a report when there is something to
+ * say: while the panel is held (so moves arrive) and once on release.  Nothing
+ * is sent while it is idle -- the host's interrupt URB simply stays pending,
+ * which is how an input endpoint normally works.
+ */
+void pud_touch_poll(void)
+{
+	static bool was_pressed;
+	static u8 seq;
+	struct pud_data *data = &g_pud_data;
+	struct pud_touch_report report;
+	bool pressed = indev_is_pressed();
+	u16 x = 0, y = 0;
+
+	if (pressed) {
+		/*
+		 * indev_read_*() already returns panel coordinates in the display
+		 * frame: the library applies the transform for the display's
+		 * rotation (TFT_ROTATION, the same number the panel is driven
+		 * with).  Clamp anyway -- the report is a wire contract, and a
+		 * finger resting on the bezel can read past the active area.
+		 */
+		x = indev_read_x();
+		y = indev_read_y();
+		if (x >= TFT_HOR_RES)
+			x = TFT_HOR_RES - 1;
+		if (y >= TFT_VER_RES)
+			y = TFT_VER_RES - 1;
+	}
+
+	data->tp.is_pressed = pressed;
+	data->tp.x = x;
+	data->tp.y = y;
+
+	if (!pressed && !was_pressed)
+		return;		/* idle, and it already knows */
+
+	was_pressed = pressed;
+
+	report.flags = pressed ? PUD_TOUCH_PRESSED : 0;
+	report.x_hi = (u8)(x >> 8);
+	report.x_lo = (u8)(x & 0xff);
+	report.y_hi = (u8)(y >> 8);
+	report.y_lo = (u8)(y & 0xff);
+	report.seq = ++seq;
+	report.version = PUD_TOUCH_VERSION;
+	report.reserved = 0;
+
+	usbd_vendor_ep4_submit(&report);
+}
+
 void pud_init(void)
 {
 	tft_driver_init();

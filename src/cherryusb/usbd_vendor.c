@@ -105,8 +105,9 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 			usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd,
 						    req_ep2_in->size));
 	case REQ_EP4_IN:
-		return usbd_ep_start_write(busid, EP4_IN_ADDR, ep4_write_buffer,
-					   64);
+		/* The device pushes touch reports by itself; this request is for
+		 * a host that polls instead, and hands it the current report. */
+		return usbd_vendor_ep4_request();
 	default:
 		// USB_LOG_WRN("Unhandled XXX Class bRequest 0x%02x\r\n", setup->bRequest);
 		return -1;
@@ -120,6 +121,9 @@ static void vendor_notify_handler(u8 busid, u8 event, void *arg)
 	switch (event) {
 	case USBD_EVENT_RESET:
 		// USB_LOG_WRN("USBD_EVENT_RESET\r\n");
+		/* the endpoint state is gone with the bus, so an in-flight
+		 * report will never complete */
+		usbd_vendor_ep4_reset();
 		break;
 
 	default:

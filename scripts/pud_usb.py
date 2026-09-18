@@ -88,6 +88,31 @@ PUD_MAX_BAND_PIXELS = (USB_TRANS_MAX_SIZE - 16) // 3
 
 DEFAULT_TIMEOUT_MS = 5000
 
+#: EP4 touch report, 8 bytes, byte-explicit (see notes/usb-protocol.md):
+#: flags, x >> 8, x & 0xff, y >> 8, y & 0xff, sequence, version, reserved.
+#: The device pushes one per poll while the panel is held plus one on release;
+#: `Display.touch_request()` is the polling alternative.
+TOUCH_REPORT_SIZE = 8
+TOUCH_VERSION = 1
+TOUCH_PRESSED = 0x01
+
+
+def parse_touch_report(buf):
+    """Decode one EP4 report into a dict."""
+    if len(buf) < TOUCH_REPORT_SIZE:
+        raise PudError("short touch report: %d of %d bytes"
+                       % (len(buf), TOUCH_REPORT_SIZE))
+
+    return {
+        "pressed": bool(buf[0] & TOUCH_PRESSED),
+        "flags": buf[0],
+        "x": (buf[1] << 8) | buf[2],
+        "y": (buf[3] << 8) | buf[4],
+        "seq": buf[5],
+        "version": buf[6],
+        "reserved": buf[7],
+    }
+
 
 class PudError(Exception):
     """Anything that should reach the user as a plain message."""
@@ -635,6 +660,27 @@ class Display:
 
     def send_full(self, rgb565, **kw):
         return self.send_rgb565(rgb565, self.width, self.height, **kw)
+
+    def touch_request(self, timeout=None):
+        """Ask the device to arm one touch report (the polling model).
+
+        The firmware also pushes reports on its own, so a host that just keeps
+        reading EP4 does not need this; it exists for the driver version that
+        requested one report per sample.
+        """
+        self.dev.ctrl_transfer(TYPE_VENDOR | EP_DIR_OUT, REQ_EP4_IN, 0, 0, None,
+                               timeout=int(timeout or DEFAULT_TIMEOUT_MS))
+
+    def read_touch(self, timeout=None):
+        """Read one EP4 report, blocking until the device sends one.
+
+        Raises ``usb.core.USBTimeoutError`` when nothing arrives, which is the
+        normal state while the panel is untouched.
+        """
+        # pyusb wants an integer number of milliseconds here, not a float
+        buf = self.dev.read(EP4_IN_ADDR, TOUCH_REPORT_SIZE,
+                            timeout=int(timeout or DEFAULT_TIMEOUT_MS))
+        return parse_touch_report(bytes(buf))
 
     def get_sn(self):
         """Read the 8-byte board unique id."""

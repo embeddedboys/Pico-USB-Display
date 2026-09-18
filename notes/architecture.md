@@ -63,7 +63,7 @@ main()                                        main.c
 | 任务 | 栈 | 优先级 | 核 | 职责 |
 | --- | --- | --- | --- | --- |
 | `usb_task` | 256 | idle + 3 | core 0（绑定） | `usb_device_init()`，等枚举完成后 **`vTaskSuspend(NULL)`**；USB 中断处理回调 |
-| `indev_read` | 256 | idle + 0 | 未绑定 | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建），每 33 ms 一次 |
+| `indev_read` | 256 | idle + 0 | 未绑定 | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建），每 33 ms 一次，采样经 EP4 推给主机 |
 | `decoder_task` | **1024** | idle + 1 | 未绑定 | 开机 logo（只画一次，见下）+ 真正的解码 + 刷屏（在 `decoder_init()` 里创建） |
 | `Tmr Svc` | 256 | `configMAX_PRIORITIES - 1` | 未绑定 | 内核软件定时器任务；**本工程没有创建任何软件定时器**，它只是空转 |
 
@@ -74,7 +74,7 @@ main()                                        main.c
 | 任务 | 声明栈 | 实测峰值 | 剩余 |
 | --- | --- | --- | --- |
 | `decoder_task` | 1024 w（4 KB） | 496 B（QOI）/ 632 B（JPEGDEC）/ 600 B（tjpgd） | 3600 B |
-| `indev_read` | 256 w（1 KB） | 432 B（含 `printf`） | 592 B |
+| `indev_read` | 256 w（1 KB） | 432 B（含已删除的 `printf`，未重测） | 592 B |
 | `usb_task` | 256 w（1 KB） | 416 B（CherryUSB 初始化） | 608 B |
 | `Tmr Svc` | 256 w（1 KB） | 152 B | 872 B |
 | `IDLE0` / `IDLE1` | 256 w（1 KB） | 128 B / 112 B | 896 B / 912 B |

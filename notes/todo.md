@@ -99,7 +99,24 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 那么"一次刷新一个 URB"的设计要在驱动侧确认（合并脏区、限速、或查 dwc3）。复现方式：
 `--frames 150 --gap-ms 0`，但**会把板子打挂**，要有人能断电重启再做。
 
-## 9. 零碎
+## 9. 把 EP4 触摸接到驱动里（固件/用户层已经做完并验证）
+
+协议见两个仓的 [notes/usb-protocol.md](usb-protocol.md)。驱动侧要改的点（都是旧版
+"跑一会儿就死"的原因）：
+
+1. **去掉每个样本一次的 `REQ_EP4_IN` 控制请求**。设备主动推送，主机只需要一开始
+   `usb_submit_urb()` 一次，然后在回调里**无论什么 status 都重新提交**（除非正在卸载）。
+   旧版 `if (urb->status) return;` 一遇到错误就永久不再提交 —— 输入就此失灵。
+2. **`pud_input_cleanup()` 的顺序**：先 `usb_kill_urb()`（并等 work 结束/置位停止标志），
+   再 `usb_free_urb()`、`kfree(ep_int_buf)`；现在 work 可能在 URB 释放后又把它提交回去。
+3. `BTN_TOUCH/BTN_LEFT` 与 `ABS_X/ABS_Y` 用设备报的坐标即可（已是显示坐标系，
+   范围 480×320）；顺手把 `input_set_abs_params` 那两行从 `ABS_MT_*` 改成
+   `ABS_X/ABS_Y`（现在设的是 MT 宏，而上报的是普通 ABS_X/Y）。
+4. 空闲时设备不发帧 → URB 会长时间挂着，这是正常的，别当超时处理。
+5. 丢"松手"的兜底：设备只在状态变化时补一帧，主机可以自己加"多久没收到按下帧就认为
+   松开"的超时（**未实现**）。
+
+## 10. 零碎
 
 - `main.c` 的 `frame_counter` 是死代码（无任何引用），可删。
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。
