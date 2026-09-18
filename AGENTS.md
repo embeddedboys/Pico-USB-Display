@@ -90,7 +90,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限 |
 
-## 用户空间工具（`scripts/`）
+## 用户空间工具（`scripts/` 与 `tools/`）
 
 - **不加载内核驱动就能验证全部功能**（pyusb 直连），比反复 insmod/rmmod 快得多。
   这是首选的验证方式。
@@ -99,6 +99,9 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 - **每种编码器只保留一份**，都在 `scripts/pud_usb.py`：QOI 与 RLE 各自与它们的 C 库
   **逐字节一致**（`python3 scripts/pud_usb.py` 自检里有参考向量）。新脚本必须复用它们，
   不要再写第二份编码器或第二套协议常量。
+- `tools/pudcodec` 是 C 写的**离线**转换器（图片/帧序列 ↔ 码流），编解码类型运行时用
+  `--codec` 指定；构建 `cmake -S tools -B tools/build`，`stb` 已 vendor 不需要联网。
+  它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `scripts/check_pudcodec.py` 对拍。
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被
   `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。

@@ -147,3 +147,70 @@ python3 scripts/xorg_desktop_share.py --display :99 --fps 15 --stats
 
 验证结果：只发出时钟区域变化的小块（如 `41x56 @ (359,54)`、`69x38 @ (358,75)`），
 而不是整屏，说明脏区检测按预期工作。
+
+---
+
+# C 工具 `tools/pudcodec`
+
+上面这些是**发给设备**的脚本；`tools/pudcodec` 是**离线的资产转换器**：把图片/帧序列
+压成设备能解的码流，或者反过来把码流还原成图片。它把上游 `rgb565-rle` / `rgb565-qoi`
+仓库里那六个体积相近的小工具（`img2rle`、`video2rle`、`rle2img` 和各自的 qoi 版）
+合成一个：**编解码类型在运行时用 `--codec` 指定**。
+
+```bash
+cmake -S tools -B tools/build && cmake --build tools/build -j     # 主机侧构建，与固件无关
+```
+
+`stb_image.h` / `stb_image_write.h` 已 vendor 在 `tools/` 里，**配置时不需要联网**
+（上游是配置时下载的）。构建产物在 `tools/build/`（已 gitignore），不进固件镜像。
+
+## 用法
+
+```bash
+pudcodec --codec <qoi|rle|lz4|jpeg> img2s   [options] <image>     # 图片 -> 码流
+pudcodec --codec <qoi|rle|lz4|jpeg> s2img   [options] <stream>    # 码流 -> 图片
+pudcodec --codec <qoi|rle|lz4|jpeg> video2s [options] <frames...> # 帧序列 -> 容器
+```
+
+| 选项 | 说明 |
+| --- | --- |
+| `--codec` | `qoi` / `rle` / `lz4` / `jpeg`；`auto` 表示从 `.h` 里的 `_CODEC` 标签取 |
+| `-o` | 输出路径（默认 `<输入>.<codec>.h/.bin`，`s2img` 默认 `<输入>.png`） |
+| `-t` | `img2s`/`video2s`：`h`（C 头，默认）或 `bin`；`s2img`：`png`/`jpg`/`bmp`/`tga` |
+| `-n` | C 数组名 / 基名（默认从输出文件名推，取到第一个 `.` 为止） |
+| `-w` `-h` | `img2s`/`video2s` 是缩放目标；`s2img` 读 `.bin` 时**必须给**（码流里没有尺寸，JPEG 除外） |
+| `-q` | JPEG 质量，默认 95 |
+| `--raw` | `video2s` 的输入是拼接好的裸 RGB565 帧 |
+
+编解码对应关系：`jpeg` 覆盖设备侧的 `DECODER_TYPE` 0 和 1（两种 JPEG 解码器吃同一份
+码流），`lz4` 是 2、`qoi` 是 3、`rle` 是 4。工具会把 `decoder_type` 打在摘要里，
+省得回头翻文档。
+
+## 与固件/脚本的一致性（2026-09 实测）
+
+`scripts/check_pudcodec.py` 把这条路径与 `pud_usb.py` 对拍，**不需要设备**：
+
+```bash
+python3 scripts/check_pudcodec.py     # 全部通过才返回 0
+```
+
+| 检查 | 结果 |
+| --- | --- |
+| `img2s --codec qoi/rle` vs `pud_usb.qoi_encode/rle_encode`（PNG 源） | **逐字节相同**（photo/noise/gradient 三份，最大 444298 B） |
+| `video2s --raw` 的容器：`[count][offsets[count+1]][data]`、帧数据 | 结构正确，第 0 帧与 Python 编码器逐字节相同 |
+| `s2img` 往返 | QOI/RLE/LZ4 都是 153600/153600 像素完全相同 |
+| `.h` 的 `_CODEC` / `_WIDTH` / `_HEIGHT` / `_SIZE` / 帧表 | 正确；`--codec auto` 能据此自动解码 |
+| JPEG 往返 | 最大 10 LSB、平均 0.20 LSB（有损，属正常） |
+| **`include/bootlogo.h` 的 QOI / RLE 分支** | 用同一张图重压，**逐字节相同**（29652 B / 49485 B） |
+
+两条**已知的不一致**（都是用压缩工具时要知道的）：
+
+- **JPEG 源图两条路径不逐字节相同**：`stb_image` 与 Pillow/libjpeg 解 JPEG 的取证
+  （IDCT 舍入）不同，同一张 `bootlogo.jpg` 一个出 49485 B、一个出 49494 B。要比字节
+  就用无损源（PNG）或 `--raw` 喂同一份 RGB565；差异 ≤1 LSB，屏上看不出来。
+- **LZ4 没有唯一编码**：工具（`LZ4_compress_default`）压同一张图是 15879 B，而
+  `include/bootlogo.h` 里那份是 18202 B —— 两者都能被 `LZ4_decompress_safe` 解开，
+  但**后者解出来的不是同一张图**（13% 像素不同，最大 21 LSB），见 [todo.md](todo.md)。
+
+> RGB565 的打包用**截断**（`r >> 3`）而不是四舍五入，跟 `pud_usb.py` 保持一致 ——
+> 这是两条主机路径能逐字节对拍的前提。

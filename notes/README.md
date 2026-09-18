@@ -12,7 +12,7 @@
 | [decoders.md](decoders.md) | 解码器抽象、QOI 解码、帧槽与**流控**（重点） |
 | [build-and-flash.md](build-and-flash.md) | RP2350 构建、CMSIS-DAP 烧录、配置项说明 |
 | [debugging.md](debugging.md) | gdb/OpenOCD 调试、HardFault 定位、解码统计计数器 |
-| [scripts.md](scripts.md) | 用户空间工具：共享模块、依赖选型、各脚本用法与实测带宽 |
+| [scripts.md](scripts.md) | 用户空间工具：Python 脚本、C 转换器 `tools/pudcodec`、依赖选型与实测数据 |
 | [pitfalls.md](pitfalls.md) | 踩坑合集：ISR 里解码、PIO/DMA 卡死、RAM 预算、bootlogo 数组 |
 | [todo.md](todo.md) | **待办**：未结案的问题、RP2040 bring-up、已知待修项 |
 
@@ -23,6 +23,7 @@
 - 显示驱动库：`lib/pico-display-lib`（子模块）
 - USB 协议栈：`lib/CherryUSB`（子模块）
 - QOI 编解码库：`src/decoders/qoi/`（来自上游 `rgb565-qoi`）
+- RLE 编解码库：`src/decoders/rle/`（来自上游 `rgb565-rle`）
 
 ## 维护约定
 

@@ -71,7 +71,20 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 （"不要把解码放进 USB 中断"这条规矩的根源）。`PICO_USE_STACK_GUARDS=1` 是可选做法，
 **未验证**。
 
-## 8. 零碎
+## 8. `include/bootlogo.h` 的 LZ4 分支与其它三个不是同一张图
+
+用 `tools/pudcodec` 重压 `assets/bootlogo.jpg`（经无损 PNG）后：
+
+- QOI 分支 29652 B、RLE 分支 49485 B —— **逐字节可复现**（`scripts/check_pudcodec.py` 第 6 项）；
+- LZ4 分支 18202 B，而工具用 `LZ4_compress_default` 压同一张图是 15879 B。两份都能被
+  `LZ4_decompress_safe` 解开（都是 480×320 = 307200 B），但**解出来不是同一张图**：
+  20233/153600 个像素不同，单通道最大差 21 LSB。
+
+即 LZ4 构型开机的 logo 与 QOI/RLE/JPEG 构型显示的不是同一份素材，那一支的生成来源已
+不可考。**未修**：LZ4 解码路径本身还不可用（每帧 308 KB `malloc`，见第 4 条），要修时
+顺手按同一张图重生成这一支（`tools/pudcodec --codec lz4 img2s` + 手工替换 `#elif == 2` 段）。
+
+## 9. 零碎
 
 - `main.c` 的 `frame_counter` 是死代码（无任何引用），可删。
 - `include/pud.h` 的 `struct decoder_data { u8 type; }` 疑似孤儿（只有定义），**未核实**。

@@ -4,3 +4,4 @@ build
 .cache
 __pycache__
 .venv
+tools/build

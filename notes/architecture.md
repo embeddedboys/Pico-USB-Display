@@ -144,6 +144,7 @@ USB 初始化并行，和改前一致。改后单次传输 5.00 ms、`dropped=0`
 | `src/decoders/` | 解码器抽象与各实现（tjpgd / JPEGDEC / LZ4 / QOI / RLE） |
 | `include/pud.h` / `include/decoder.h` | 对外接口与类型 |
 | `include/bootlogo.h` | 按 `DECODER_TYPE` 分支的开机 logo 压缩数据 |
+| `tools/` | 主机侧 C 工具：`pudcodec` 图片/视频 ↔ 码流转换器（不参与固件构建） |
 | `lib/` | 子模块：Pico SDK 之外的依赖 |
 
 ## 并发与同步
