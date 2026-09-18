@@ -24,9 +24,11 @@
 
 // #include "udd.h"
 #include "tft.h"
+#include "backlight.h"
 #include "decoder.h"
 #include "lz4.h"
 #include "usb.h"
+#include "bootlogo.h"
 
 #include "pico/time.h"
 
@@ -34,7 +36,6 @@
 #include "task.h"
 #include "semphr.h"
 
-mutex_t decoder_mutex;
 uint16_t decoder_xs, decoder_ys;
 uint16_t decoder_xe, decoder_ye;
 
@@ -273,14 +274,6 @@ void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size)
 	STAT_DRAW_ADD();
 }
 
-void decoder_set_xy(u16 x, u16 y)
-{
-	mutex_enter_blocking(&decoder_mutex);
-	decoder_xs = x;
-	decoder_ys = y;
-	mutex_exit(&decoder_mutex);
-}
-
 void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye)
 {
 	/* Called from the USB ISR only, so no blocking is allowed. The decoder
@@ -372,17 +365,27 @@ static void decoder_task(void *param)
 
 	(void)param;
 
+	/* First paint: the boot logo, before any host frame.  The panel has
+	 * exactly one writer (this task), so no lock is needed, and doing it
+	 * here instead of in a task of its own both drops a task and makes
+	 * "the logo is the first thing drawn" a hard guarantee.  The USB side
+	 * is independent: enumeration runs on core 0 while this draws. */
+	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
+			(uint8_t *)bootlogo, sizeof(bootlogo));
+
+	busy_wait_ms(10);
+	backlight_set_level(100);
+	printf("backlight set to 100%%\n");
+
 	for (;;) {
 		xSemaphoreTake(s_decoder_sem, portMAX_DELAY);
 
 		for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 			if (s_frames[i].busy) {
-				mutex_enter_blocking(&decoder_mutex);
 				decoder_drawimg(s_frames[i].xs, s_frames[i].ys,
 						s_frames[i].xe, s_frames[i].ye,
 						s_frames[i].data,
 						s_frames[i].size);
-				mutex_exit(&decoder_mutex);
 				s_frames[i].busy = 0;
 				g_decoder_stat_drawn++;
 				/* A slot is free again: re-arm EP1 if the
@@ -398,7 +401,6 @@ static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI" };
 
 void decoder_init(void)
 {
-	mutex_init(&decoder_mutex);
 	s_decoder_sem = xSemaphoreCreateBinary();
 	xTaskCreate(decoder_task, "decoder_task", 4096, NULL,
 		    tskIDLE_PRIORITY + 1, NULL);

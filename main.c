@@ -38,9 +38,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
-#include "semphr.h"
 
-#include "bootlogo.h"
 #include "pud.h"
 
 u32 frame_counter = 0;
@@ -48,21 +46,6 @@ u32 frame_counter = 0;
 
 void vApplicationTickHook()
 {
-}
-
-static portTASK_FUNCTION(bootlogo_task_handler, pvParameters)
-{
-	/* Serialise with decoder_task: both drive the same panel. */
-	mutex_enter_blocking(&decoder_mutex);
-	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
-			(uint8_t *)bootlogo, sizeof(bootlogo));
-	mutex_exit(&decoder_mutex);
-
-	busy_wait_ms(10);
-	backlight_set_level(100);
-	printf("backlight set to 100%%\n");
-
-	vTaskDelete(NULL);
 }
 
 #if !INDEV_DRV_NOT_USED
@@ -130,11 +113,6 @@ int main(void)
 	xTaskCreate(usb_task_handler, "usb_task", 256, NULL,
 		    (tskIDLE_PRIORITY + 3), &usb_handler);
 	vTaskCoreAffinitySet(usb_handler, (1 << 0));
-
-	TaskHandle_t bootlogo_handler;
-	xTaskCreate(bootlogo_task_handler, "bootlogo_task", 256, NULL,
-		    (tskIDLE_PRIORITY + 2), &bootlogo_handler);
-	vTaskCoreAffinitySet(bootlogo_handler, (1 << 1));
 
 #if !INDEV_DRV_NOT_USED
 	TaskHandle_t indev_handler;

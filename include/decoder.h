@@ -22,7 +22,6 @@
 #ifndef __DECODER_H
 #define __DECODER_H
 
-#include <pico/mutex.h>
 #include <stdbool.h>
 
 // #include "tjpgd/tjpgd.h"
@@ -41,7 +40,6 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 
-extern mutex_t decoder_mutex;
 extern uint16_t decoder_xs, decoder_ys;
 extern uint16_t decoder_xe, decoder_ye;
 
@@ -52,7 +50,6 @@ extern void lz4_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *lz4_data, u32 lz4_si
 extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data, u32 qoi_size);
 
 extern void decoder_init(void);
-extern void decoder_set_xy(u16 x, u16 y);
 extern void decoder_set_window(u16 xs, u16 ys, u16 xe, u16 ye);
 extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye,
 				 const u8 *data, u32 size);
