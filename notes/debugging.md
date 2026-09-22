@@ -347,21 +347,16 @@ A/B 交替烧写（同一主机、同一脚本、各 2 次，`full/solid（单�
 | 步骤 | 主机动作 | 期望 |
 | --- | --- | --- |
 | 基线 | 发一帧 64x64 | 成功 |
-| 空闲 | `sleep 5` 后发一帧 | 成功（重武装在正常空闲时不该被需要） |
+| 空闲 | `sleep 5` 后发一帧 | 成功（空闲不需要任何补救，`stale` 不增长） |
 | 中途断流 | header 声明 4000 B 只发 100 B，`sleep 1.2` 后发一帧 | 成功，`stale` +1 |
 | ZLP | header 声明 52 B + 52 B 载荷（正好 64 B，主机会补一个 ZLP），再发一帧 | 成功（实测 5/5，计数不变） |
 | 全屏 | 发一帧 480x320 | 成功 |
-| **超长 → stall（放最后）** | header 声明 `> EP1_RD_BUF_SIZE`，主机拿到 stall 后 `clear_halt()`，等 >2 s 再发一帧 | 成功；`oversize` +1、`rearm` 增长 |
+| 超长 header（放最后） | header 声明 `> EP1_RD_BUF_SIZE`，再发一帧正常画面 | **主机侧看不到错误**（设备丢弃这一笔并重新武装），`oversize` +1，下一帧照常成功 |
 
-**为什么把 stall 放最后**：故意 stall 之后，端点里会留下让随后一次解析错位的字节，
-于是**再 stall 一次**（级联），要等 caretaker 空闲重武装才重新对齐 —— 排在中间会让后面
-几步假失败（实测：排在 ZLP/全屏前面时，那两步都会 EPIPE）。
-
-**`EP1_IDLE_REARM_MS` 那支是承重的**：删掉后"超长 → stall"这一步会永久超时
-（`s_ep1.armed` 恒 `true`、`got` 恒 0）。原因是 `tick()` 在主机还没清掉自己那半边 halt
-时就 arm，这次读会被控制器丢掉，而主机随后的 `CLEAR_FEATURE` 由 CherryUSB 核心在标准
-端点请求里直接处理、**不通知应用**（`lib/CherryUSB/core/usbd_core.c` 的
-`USB_REQUEST_CLEAR_FEATURE` 分支），也就是没有事件可挂钩。
+**为什么"超长"不再产生 stall**：设备侧把不可信的 header **丢弃并重新武装**，而不是 stall
+EP1（见 [usb-protocol.md](usb-protocol.md) 的"失效与自愈"）。stall 会让主机 `clear_halt()`
+重试，实测那条路会把宿主控制器卡死。所以这一步现在只验证"丢弃之后下一帧照常"，主机侧
+应当**没有任何错误**。
 
 正常主机（驱动刷屏）下应当**永远**是 `bad = 0`、`oversize`/`stale` 不增长、`dropped = 0`：
 受控测量 20 s 全屏刷新 = 181 笔传输 / 182 次完成 / **0 失败**。

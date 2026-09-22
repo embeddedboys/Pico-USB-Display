@@ -63,10 +63,18 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
         }
         memcpy(&s_ep1.hdr, ep1_read_buffer, sizeof(s_ep1.hdr));
         s_ep1.total = PUD_EP1_HEADER_SIZE + s_ep1.hdr.size;
-        if (s_ep1.total > EP1_RD_BUF_SIZE) {  /* 主机报了个不可能的长度 */
+
+        /* 不可信的 header：丢弃这一笔并重新武装，**不 stall**（理由见"失效与自愈"） */
+        if (s_ep1.total > EP1_RD_BUF_SIZE) {
             g_ep1_stat.oversize++;
-            s_ep1.stalled = true;
-            usbd_ep_set_stall(0, EP1_OUT_ADDR);   /* 大声失败，别静默错位 */
+            ep1_finish(false);
+            return;
+        }
+        if (s_ep1.hdr.xs > s_ep1.hdr.xe || s_ep1.hdr.ys > s_ep1.hdr.ye ||
+            s_ep1.hdr.xe >= g_pud_data.disp.xres ||
+            s_ep1.hdr.ye >= g_pud_data.disp.yres) {
+            g_ep1_stat.bad++;
+            ep1_finish(false);
             return;
         }
     }
@@ -78,11 +86,17 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 
 **注意 `xe`/`ye` 是闭区间**：固件算宽度用 `xe - xs + 1`。坐标是整屏绝对坐标。
 诊断计数器都在一个结构体里（gdb 里 `p g_ep1_stat` 一次读完）：`oversize`（声明的长度
-超出 `ep1_read_buffer`）、`bad`（没有完整 header，或者收到的比声明的多）、`stale`
-（一笔传输连续 `EP1_TRANSFER_MAX_MS` 没有收到任何字节而被丢掉）、`rearm`（空闲的读被
-重新武装）。正常主机下前三个应当一直是 0；`rearm` 会随主机静默而增长，那是预期行为。
+超出 `ep1_read_buffer`）、`bad`（没有完整 header、矩形越界，或收到的比
+声明的多）、`stale`（一笔传输连续 `EP1_TRANSFER_MAX_MS` 没有收到任何字节而被丢掉）。
+正常主机下三个应当一直是 0。
 计时**按"最后一次收到字节"**走：主机跑掉就再也没有字节，超时能抓到；而在途的大传输每来
 一个包就刷新，不会被从中间砍断。
+
+**`size` 奇偶都可以**（2026-09 起）：老固件拒绝奇数 `size`，理由是"RP2350 要整字"，
+但每次读都被钳到单个 max packet（见 port 的 `usbd_ep_start_read`），声明的长度根本到不了
+控制器。RP2350 实测 4 奇 4 偶、987~43271 B 全部落地（`got == total`）。主机仍可以
+向上取偶（驱动和 `pud_usb.py` 都这么做），QOI 解码到结束标记就停，尾字节不参与解码，
+两种写法解码结果一致。
 
 ### 流控为什么这样设计
 
@@ -92,7 +106,7 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 
 改成**背压**：槽满时不武装 EP1。因为主机的批量传输紧跟在其控制请求之后，
 端点没武装，主机的 bulk 写入自然阻塞等待 —— 协议不需要任何改动，
-主机侧（`usb_sg_wait()`）也无需感知。
+主机侧也无需感知（驱动的同步 `usb_sg_wait()` 与异步 completion 都只是多等一会儿）。
 
 代价与前提：
 - 主机的 `pud_flush()` 有 3 秒超时看门狗；解码是毫秒级，正常不会触发。
@@ -116,7 +130,6 @@ void usbd_vendor_ep1_tick(void)
     if (s_ep1.armed || !decoder_slot_free())
         return;
 
-    if (s_ep1.stalled) { s_ep1.stalled = false; usbd_ep_clear_stall(0, EP1_OUT_ADDR); }
     s_ep1.armed = true;
     s_ep1.got = 0;
     s_ep1.total = 0;
@@ -137,20 +150,18 @@ EP1 是 bulk OUT，**设备侧必须挂着一个读**才会收数据；`s_ep1.ar
 
 | 情况 | 症状（真机实测） | 处理 |
 | --- | --- | --- |
-| 主机在传输中途消失，剩下半笔 | 读一直等永远不来的载荷，下一帧的字节被当成它的载荷 | 连续 `EP1_TRANSFER_MAX_MS`（500 ms）收不到任何字节就丢弃并重新武装（`stale++`） |
+| 主机在传输中途消失，剩下半笔 | 读一直等永远不来的载荷，下一帧的字节被当成它的载荷 | `poll()` 里连续 `EP1_TRANSFER_MAX_MS`（500 ms）**没有收到任何字节**就丢弃并重新武装（`stale++`） |
 | 主机重新配置（SET_CONFIGURATION 会丢掉设备端点里排队的缓冲） | `armed` 卡在 `true`，`tick()` 以为"有读在飞"而不武装，于是**一个字节都收不到**（实测 `got` 恒 0、所有计数器为 0） | `CONFIGURED` 先 `reset()` 再 `tick()` —— **顺序就是修法的全部** |
 | 零长度包（ZLP）结束一笔空传输 | 原来直接 `return`，EP1 从此不再武装 | `ep1_finish(false)`，交回 `tick()` |
-| 超长传输 stall 之后（或任何原因）**没有读挂着** | `armed` 为 `false`，主机每笔 bulk 都 NAK | `poll()` 看到 `!armed` 就 `tick()`：清 stall 并重新武装 |
-| stall 被主机 `CLEAR_FEATURE` 清掉，但**软件挂的读已被控制器丢掉** | `armed` 恒为 `true`、`got` 恒为 0，主机每笔都 3 s 超时（实测：超长传输 stall → 主机 `clear_halt` → 下一帧超时，`g_ep1_stat.oversize=1`） | `poll()` 里 `EP1_IDLE_REARM_MS`（2 s）空闲重武装（`rearm++`）—— 唯一的修法，见下 |
+| 不可信的 header：`12+size` 超限、矩形越界 | 原实现是**故意 stall EP1**（"大声失败，别静默错位"） | **改成丢弃这一笔并重新武装**（`oversize++` / `bad++`），不再 stall，见下 |
 
-**为什么最后一条只能靠定时重武装**：`tick()` 在主机还没清掉自己那半边 halt 时就 `usbd_ep_clear_stall()`
-并武装，这次武装会被控制器丢掉；随后主机发 `CLEAR_FEATURE`，CherryUSB 核心在标准端点请求里
-直接 `usbd_ep_clear_stall()`（`usbd_core.c`），**不通知应用**，所以固件没有事件可以挂钩。
-`got == 0` 说明读还指向 `ep1_read_buffer` 开头，重新武装不会丢数据，代价只是空闲总线上每 2 s
-一次 reset+arm。
-（**实测对照**：主机发一笔声明长度超过 `ep1_read_buffer` 的传输使其 stall，`clear_halt()` 后
-再发一帧 —— 删掉这一支时该帧永久超时、设备 `armed` 恒 `true`；加回来即恢复。测试脚本见
-`notes/debugging.md` 的 EP1 自愈一节。）
+**为什么不再 stall（2026-09 改）**：stall 会让主机的写失败，而主机接下来的动作是
+`clear_halt()` 重试 —— 实测这条路会把**宿主控制器**卡死：`usb_sg_wait()`/`usb_sg_cancel()`
+不返回、DRM modeset 锁被占住，板子连重启都不干净。驱动靠分带保证正常主机永远不会送出
+超限的 header，所以这种 header 只可能是流丢了帧同步，丢掉它比 stall 更安全；设备下一笔
+照常武装，主机侧看不到错误。
+（注意与 `REQ_EP1_OUT` 那条**控制请求**区分：那条仍然 stall，因为它是给老主机的明确
+失败信号，不涉及 EP1 数据端点。）
 
 `poll()` 只在解码任务空闲等待时运行（`EP1_POLL_PERIOD_MS` = 200 ms），所以它同时也是
 "整笔传输超时"的唯一执行点。验收：主机侧 `S/C Bo:6 … 0 <len>`（完成状态 0，而不是 3 s 后
@@ -322,7 +333,7 @@ EP1 没有可测影响（理论上也只有 8 B × 125 Hz 的量级）。
 
 1. **主机用 16 字节 wLength 传 12 字节的有效结构**（`struct req_ep1_out`）。
    固件只读前 12 字节，所以现在能工作。
-2. **`size` 可能比真实压缩长度大 1**（主机为 RP2350 做了向上取偶）。
+2. **`size` 可能比真实压缩长度大 1**（主机可以选择向上取偶；设备奇偶都接受）。
    QOI 解码在结束标记处停止，不会消费多余字节。
 
 详见 `PUD-kernel-drivers/notes/usb-protocol.md` 的两节"已知不一致"。
