@@ -25,8 +25,8 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
 void usbd_vendor_ep1_tick(void);
 
 /* EP1 caretaker: called from the decoder task while it waits for work, to drop
- * a transfer whose host went away and to re-arm a read the controller dropped
- * (measured after a stalled-transfer recovery -- see usbd_vendor_ep1_poll()). */
+ * a transfer whose host stopped making progress and re-arm the endpoint (see
+ * usbd_vendor_ep1_poll()). */
 void usbd_vendor_ep1_poll(void);
 
 /* How often the decoder task calls the caretaker when it has no work. */

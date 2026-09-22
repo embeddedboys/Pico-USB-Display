@@ -100,9 +100,12 @@ struct pud_caps {
  *
  * The device reads one max-size packet first, which always holds the whole
  * header (PUD_EP1_HEADER_SIZE <= 64), and then exactly the remaining payload,
- * so the end of a transfer never depends on a short packet.  A host that
- * declares more than frame_max - PUD_EP1_HEADER_SIZE gets its endpoint stalled
- * instead of a truncated frame (g_ep1_stat.oversize).
+ * so the end of a transfer never depends on a short packet.  A header that
+ * declares more than frame_max - PUD_EP1_HEADER_SIZE, or a rectangle off the
+ * panel, is not believable: the transfer is dropped and the endpoint re-armed,
+ * counted by g_ep1_stat.oversize/bad.  It is deliberately *not* stalled -- see
+ * notes/usb-protocol.md.  An odd `size` is accepted; a host may pad to even,
+ * but does not have to (see the EP1 commentary in src/cherryusb/usb.c).
  */
 #define PUD_EP1_HEADER_SIZE 12
 
