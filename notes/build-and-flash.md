@@ -69,14 +69,24 @@ CMake 还提供了 `flash` 目标（`CMakeLists.txt` 第 137 行起，按板子�
 ## 编辑器 / clangd
 
 `.clang-format`、`.clangd`、`.vscode/`、`.editorconfig` 都在仓库根，开箱可用 ——
-**前提是先构建过一次**：`compile_commands.json` 由 CMake 写进构建目录
+**前提是先 configure 过一次**：`compile_commands.json` 由 CMake 写进构建目录
 （`CMakeLists.txt` 已设 `CMAKE_EXPORT_COMPILE_COMMANDS ON`）。
 
-- `.clangd` 里的 `CompilationDatabase: build-pico2` 指向它，`.vscode/settings.json`
-  的 `--compile-commands-dir` 同理；换构建目录（RP2040 的 `build/`）要一起改。
+- 编辑器**不写死任何构建目录**：`.clangd` 与 `.vscode/settings.json` 都不指定路径，
+  clangd 靠自己的发现规则去找 `compile_commands.json`（先搜源文件所在的树，再搜
+  `build/`）。`build-pico2/` 不在这个默认范围里，所以 `CMakeLists.txt` 在每次
+  **configure** 时把仓库根的 `compile_commands.json` **符号链接**指向该构建目录
+  （只替换链接，绝不动真实文件 ✓）：
+
+  `build-pico2/`（RP2350）和 `build/`（RP2040）谁最后 configure，clangd 就用谁的编译
+  参数 —— 换板子重新 configure 那个目录就行，配置本身一个字不用改；只想让编辑器换过去、
+  不整体重编，`cmake -S . -B build-pico2 -DPICO_BOARD=pico2` 就够了。
+  链接是生成物（`.gitignore` 已忽略）。注意 clangd 自己也会把 `build/` 当候选：链接不在时
+  它会**悄悄**用 RP2040 的参数，那比没有索引更容易误导；删掉 `build-pico2/` 之后重新
+  configure 即恢复（曾经因为直接删掉它，clangd 完全没有索引）。
 - 编译命令调用的是 `arm-none-eabi-gcc`，clangd 得向它索取内建头文件路径，否则会
   报找不到 `stdint.h`：VS Code 已传 `--query-driver=**/arm-none-eabi-*`；命令行单跑用
-  `clangd --check=src/pud.c --query-driver=/usr/bin/arm-none-eabi-*`
+  `clangd --check=src/cherryusb/usb.c --query-driver=/usr/bin/arm-none-eabi-*`
   （结尾的 `All checks completed, 0 errors` 就是通过）。
 - 风格是**内核风格**（tab + 8 宽，`.clang-format` 取自内核，唯一偏离是
   `UseTab: ForIndentation`），保存即格式化。**vendored 与生成的代码不吃这套**：

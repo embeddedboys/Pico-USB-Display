@@ -15,6 +15,25 @@ if (NOT DEFINED PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Keep clangd pointed at the compilation database of whichever build directory
+# was configured last, without naming one anywhere.  clangd looks for
+# compile_commands.json in the source tree itself (and in a "build"
+# subdirectory), which is why build-pico2 -- the RP2350 target the firmware is
+# flashed from -- needs a link at the top level to be found at all.  Only a link
+# is ever replaced here: a real file is someone else's.
+if(CMAKE_EXPORT_COMPILE_COMMANDS AND NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+    set(PUD_CDB_LINK "${CMAKE_SOURCE_DIR}/compile_commands.json")
+    if(IS_SYMLINK "${PUD_CDB_LINK}")
+        file(REMOVE "${PUD_CDB_LINK}")
+    endif()
+    if(NOT EXISTS "${PUD_CDB_LINK}")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+                        "${CMAKE_BINARY_DIR}/compile_commands.json"
+                        "${PUD_CDB_LINK}")
+    endif()
+endif()
+
 SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -Wl,--print-memory-usage")
 SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -Wl,--print-memory-usage")
 

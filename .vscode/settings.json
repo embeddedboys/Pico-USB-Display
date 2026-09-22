@@ -6,9 +6,9 @@
   "C_Cpp.intelliSenseEngine": "disabled",
 
   "clangd.arguments": [
-    // The RP2350 build directory -- build it once before opening the editor, and
-    // keep this in step with CompilationDatabase in .clangd.
-    "--compile-commands-dir=${workspaceFolder}/build-pico2",
+    // No --compile-commands-dir on purpose: CMakeLists.txt keeps a
+    // compile_commands.json link at the top of the tree pointing at whichever
+    // build directory was configured last, and clangd finds that by itself.
     // Index the whole firmware (and the SDK parts it compiles) in the
     // background -- without it, "go to definition" only ever finds the
     // declaration in a header, never the implementation in the .c file.
@@ -25,8 +25,7 @@
     "--all-scopes-completion",
     "--completion-style=detailed",
     "--pch-storage=memory",
-    // .clangd tells clangd where the database is; --clang-tidy surfaces the
-    // kernel-ish warnings in the editor.
+    // --clang-tidy surfaces the kernel-ish warnings in the editor.
     "--clang-tidy",
     "--limit-results=100"
   ],
