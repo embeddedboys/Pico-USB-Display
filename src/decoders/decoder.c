@@ -736,27 +736,37 @@ static void decoder_task(void *param)
 	printf("backlight set to 100%%\n");
 
 	for (;;) {
-		/* The timed wait doubles as the EP1 caretaker: it recovers a
-		 * transfer whose host went away, and re-arms a read that was
-		 * lost without an event we could see. */
-		if (xSemaphoreTake(s_decoder_sem,
-		                   pdMS_TO_TICKS(EP1_POLL_PERIOD_MS)) != pdTRUE)
-			usbd_vendor_ep1_poll();
+		int slot = -1;
 
+		/* Take stock before sleeping.  The submit side signals a binary
+		 * semaphore, so two frames arriving close together can collapse
+		 * into a single give; scanning the slots first draws the second
+		 * frame now instead of after the 200 ms wait below. */
 		for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 			if (s_frames[i].busy) {
-				decoder_drawimg(s_frames[i].xs, s_frames[i].ys,
-				                s_frames[i].xe, s_frames[i].ye,
-				                s_frames[i].data,
-				                s_frames[i].size);
-				s_frames[i].busy = 0;
-				g_decoder_stat_drawn++;
-				/* A slot is free again: re-arm EP1 if the
-				 * host's request was deferred. */
-				usbd_vendor_ep1_tick();
+				slot = i;
 				break;
 			}
 		}
+
+		if (slot < 0) {
+			/* Nothing queued.  The timed wait doubles as the EP1
+			 * caretaker: it drops a transfer whose host went away
+			 * and re-arms a read that was lost. */
+			if (xSemaphoreTake(s_decoder_sem,
+			                   pdMS_TO_TICKS(EP1_POLL_PERIOD_MS)) != pdTRUE)
+				usbd_vendor_ep1_poll();
+			continue;
+		}
+
+		decoder_drawimg(s_frames[slot].xs, s_frames[slot].ys,
+		                s_frames[slot].xe, s_frames[slot].ye,
+		                s_frames[slot].data, s_frames[slot].size);
+		s_frames[slot].busy = 0;
+		g_decoder_stat_drawn++;
+		/* A slot is free again: re-arm EP1 if the host's request was
+		 * deferred. */
+		usbd_vendor_ep1_tick();
 	}
 }
 
