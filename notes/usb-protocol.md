@@ -50,33 +50,39 @@ default:           return -1;   /* 含已废弃的 REQ_EP1_OUT，见下 */
 ```c
 void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
-    s_ep1_armed = false;
-    s_ep1_got += nbytes;
+    s_ep1.armed = false;
+    if (!nbytes) { ep1_finish(false); return; }   /* ZLP：结束一笔空传输 */
+    s_ep1.got += nbytes;
+    ep1_mark();                                   /* 进度：超时计时看这个 */
 
-    if (!s_ep1_total) {                       /* 还在读 header 那个包 */
-        if (s_ep1_got < PUD_EP1_HEADER_SIZE) {
-            if (nbytes < EP1_FIRST_READ) { g_ep1_stat_bad++; ep1_finish(false); }
+    if (!s_ep1.total) {                       /* 还在读 header 那个包 */
+        if (s_ep1.got < PUD_EP1_HEADER_SIZE) {
+            if (nbytes < EP1_FIRST_READ) { g_ep1_stat.bad++; ep1_finish(false); }
             else                          ep1_read_more();
             return;
         }
-        memcpy(&s_ep1_hdr, ep1_read_buffer, sizeof(s_ep1_hdr));
-        s_ep1_total = PUD_EP1_HEADER_SIZE + s_ep1_hdr.size;
-        if (s_ep1_total > EP1_RD_BUF_SIZE) {  /* 主机报了个不可能的长度 */
-            g_ep1_stat_oversize++;
-            s_ep1_stalled = true;
+        memcpy(&s_ep1.hdr, ep1_read_buffer, sizeof(s_ep1.hdr));
+        s_ep1.total = PUD_EP1_HEADER_SIZE + s_ep1.hdr.size;
+        if (s_ep1.total > EP1_RD_BUF_SIZE) {  /* 主机报了个不可能的长度 */
+            g_ep1_stat.oversize++;
+            s_ep1.stalled = true;
             usbd_ep_set_stall(0, EP1_OUT_ADDR);   /* 大声失败，别静默错位 */
             return;
         }
     }
-    if (s_ep1_got < s_ep1_total) ep1_read_more();
-    else if (s_ep1_got != s_ep1_total) g_ep1_stat_bad++, ep1_finish(false);
+    if (s_ep1.got < s_ep1.total) ep1_read_more();
+    else if (s_ep1.got != s_ep1.total) g_ep1_stat.bad++, ep1_finish(false);
     else ep1_finish(true);                    /* 交给 decoder_submit_frame() */
 }
 ```
 
 **注意 `xe`/`ye` 是闭区间**：固件算宽度用 `xe - xs + 1`。坐标是整屏绝对坐标。
-两个诊断计数器（gdb 里可读）应当一直是 0：`g_ep1_stat_oversize`（声明的长度超出
-`ep1_read_buffer`）、`g_ep1_stat_bad`（没有完整 header，或者收到的比声明的多）。
+诊断计数器都在一个结构体里（gdb 里 `p g_ep1_stat` 一次读完）：`oversize`（声明的长度
+超出 `ep1_read_buffer`）、`bad`（没有完整 header，或者收到的比声明的多）、`stale`
+（一笔传输连续 `EP1_TRANSFER_MAX_MS` 没有收到任何字节而被丢掉）、`rearm`（空闲的读被
+重新武装）。正常主机下前三个应当一直是 0；`rearm` 会随主机静默而增长，那是预期行为。
+计时**按"最后一次收到字节"**走：主机跑掉就再也没有字节，超时能抓到；而在途的大传输每来
+一个包就刷新，不会被从中间砍断。
 
 ### 流控为什么这样设计
 
@@ -102,22 +108,54 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 只有一个入口（`src/cherryusb/usb.c`）：
 
 ```c
-/* 由解码任务在释放帧槽后调用，也会在"配置完成"和"提交完一帧"时调用 */
+/* 由解码任务在释放帧槽后、配置完成时、以及"提交完一帧"时调用 */
 void usbd_vendor_ep1_tick(void)
 {
-    if (s_ep1_armed || !decoder_slot_free())
+    if (!usb_is_configured())      /* 枚举完成前武装会把端点搞坏 */
+        return;
+    if (s_ep1.armed || !decoder_slot_free())
         return;
 
-    if (s_ep1_stalled) { s_ep1_stalled = false; usbd_ep_clear_stall(0, EP1_OUT_ADDR); }
-    s_ep1_armed = true;
-    s_ep1_got = 0;
-    s_ep1_total = 0;
+    if (s_ep1.stalled) { s_ep1.stalled = false; usbd_ep_clear_stall(0, EP1_OUT_ADDR); }
+    s_ep1.armed = true;
+    s_ep1.got = 0;
+    s_ep1.total = 0;
+    ep1_mark();
     usbd_ep_start_read(0, EP1_OUT_ADDR, ep1_read_buffer, EP1_FIRST_READ);
 }
 ```
 
-`USBD_EVENT_CONFIGURED` 时武装第一次；`USBD_EVENT_RESET` 时 `usbd_vendor_ep1_reset()`
-清掉状态（端点随总线没了）。ISR 与解码任务都会碰这几个变量，所以都是 `volatile`。
+`USBD_EVENT_CONFIGURED` 时**先 `usbd_vendor_ep1_reset()` 再 `tick()`**，
+`USBD_EVENT_RESET` / `USBD_EVENT_DISCONNECTED` 时 `reset()`。ISR 与解码任务都会碰这份
+状态，所以它整体 `volatile`（`g_ep1_stat` 同理，只给调试器看）。
+
+### 失效与自愈
+
+EP1 是 bulk OUT，**设备侧必须挂着一个读**才会收数据；`s_ep1.armed` 只是软件认为"挂着"，
+硬件里那个读可能早就没了。已知这几种情况会让它**永久 NAK**（主机侧表现为每次 3 s 后
+超时、`flush failed: -110`，屏上再不动，只有插拔才好）：
+
+| 情况 | 症状（真机实测） | 处理 |
+| --- | --- | --- |
+| 主机在传输中途消失，剩下半笔 | 读一直等永远不来的载荷，下一帧的字节被当成它的载荷 | 连续 `EP1_TRANSFER_MAX_MS`（500 ms）收不到任何字节就丢弃并重新武装（`stale++`） |
+| 主机重新配置（SET_CONFIGURATION 会丢掉设备端点里排队的缓冲） | `armed` 卡在 `true`，`tick()` 以为"有读在飞"而不武装，于是**一个字节都收不到**（实测 `got` 恒 0、所有计数器为 0） | `CONFIGURED` 先 `reset()` 再 `tick()` —— **顺序就是修法的全部** |
+| 零长度包（ZLP）结束一笔空传输 | 原来直接 `return`，EP1 从此不再武装 | `ep1_finish(false)`，交回 `tick()` |
+| 超长传输 stall 之后（或任何原因）**没有读挂着** | `armed` 为 `false`，主机每笔 bulk 都 NAK | `poll()` 看到 `!armed` 就 `tick()`：清 stall 并重新武装 |
+| stall 被主机 `CLEAR_FEATURE` 清掉，但**软件挂的读已被控制器丢掉** | `armed` 恒为 `true`、`got` 恒为 0，主机每笔都 3 s 超时（实测：超长传输 stall → 主机 `clear_halt` → 下一帧超时，`g_ep1_stat.oversize=1`） | `poll()` 里 `EP1_IDLE_REARM_MS`（2 s）空闲重武装（`rearm++`）—— 唯一的修法，见下 |
+
+**为什么最后一条只能靠定时重武装**：`tick()` 在主机还没清掉自己那半边 halt 时就 `usbd_ep_clear_stall()`
+并武装，这次武装会被控制器丢掉；随后主机发 `CLEAR_FEATURE`，CherryUSB 核心在标准端点请求里
+直接 `usbd_ep_clear_stall()`（`usbd_core.c`），**不通知应用**，所以固件没有事件可以挂钩。
+`got == 0` 说明读还指向 `ep1_read_buffer` 开头，重新武装不会丢数据，代价只是空闲总线上每 2 s
+一次 reset+arm。
+（**实测对照**：主机发一笔声明长度超过 `ep1_read_buffer` 的传输使其 stall，`clear_halt()` 后
+再发一帧 —— 删掉这一支时该帧永久超时、设备 `armed` 恒 `true`；加回来即恢复。测试脚本见
+`notes/debugging.md` 的 EP1 自愈一节。）
+
+`poll()` 只在解码任务空闲等待时运行（`EP1_POLL_PERIOD_MS` = 200 ms），所以它同时也是
+"整笔传输超时"的唯一执行点。验收：主机侧 `S/C Bo:6 … 0 <len>`（完成状态 0，而不是 3 s 后
+被驱动自己的看门狗取消成 `-104`），设备侧 `submitted/drawn` 增长且 `bad/oversize/stale`
+保持 0。
 
 ## EP2 查询的处理
 

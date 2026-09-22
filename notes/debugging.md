@@ -333,3 +333,39 @@ A/B 交替烧写（同一主机、同一脚本、各 2 次，`full/solid（单�
 用 `monitor reset run` 重启固件后，主机会看到一次 USB disconnect + connect，
 驱动会重新 probe。主机的 `dmesg` 里能看到 `pud_drm_setup` 一路到 `pud_drm_pipe_enable`。
 如果列表里旧的 `cardN` 还在、新的多出来一个，那是正常的（旧节点会被 udev 清掉）。
+
+## EP1 自愈的验收（真机）
+
+在**板子上**跑 pyusb 脚本，逐个触发失效，每步之间发一帧正常画面。前提：
+
+- `pud` 驱动 unbind 掉（`echo 6-1:1.0 > /sys/bus/usb/drivers/pud/unbind`，跑完再 bind 回来）；
+- 板子上有 pyusb（缺 `ensurepip` 时先 `apt install python3.12-venv`）：
+  `python3 -m venv ~/pud-venv && ~/pud-venv/bin/pip install pyusb`；
+- 设备侧计数器用 gdb 读 `s_ep1` / `g_ep1_stat`（见"只读状态"），脚本前后各读一次比增量
+  （计数器按 MCU 上电清零）。
+
+| 步骤 | 主机动作 | 期望 |
+| --- | --- | --- |
+| 基线 | 发一帧 64x64 | 成功 |
+| 空闲 | `sleep 5` 后发一帧 | 成功（重武装在正常空闲时不该被需要） |
+| 中途断流 | header 声明 4000 B 只发 100 B，`sleep 1.2` 后发一帧 | 成功，`stale` +1 |
+| ZLP | header 声明 52 B + 52 B 载荷（正好 64 B，主机会补一个 ZLP），再发一帧 | 成功（实测 5/5，计数不变） |
+| 全屏 | 发一帧 480x320 | 成功 |
+| **超长 → stall（放最后）** | header 声明 `> EP1_RD_BUF_SIZE`，主机拿到 stall 后 `clear_halt()`，等 >2 s 再发一帧 | 成功；`oversize` +1、`rearm` 增长 |
+
+**为什么把 stall 放最后**：故意 stall 之后，端点里会留下让随后一次解析错位的字节，
+于是**再 stall 一次**（级联），要等 caretaker 空闲重武装才重新对齐 —— 排在中间会让后面
+几步假失败（实测：排在 ZLP/全屏前面时，那两步都会 EPIPE）。
+
+**`EP1_IDLE_REARM_MS` 那支是承重的**：删掉后"超长 → stall"这一步会永久超时
+（`s_ep1.armed` 恒 `true`、`got` 恒 0）。原因是 `tick()` 在主机还没清掉自己那半边 halt
+时就 arm，这次读会被控制器丢掉，而主机随后的 `CLEAR_FEATURE` 由 CherryUSB 核心在标准
+端点请求里直接处理、**不通知应用**（`lib/CherryUSB/core/usbd_core.c` 的
+`USB_REQUEST_CLEAR_FEATURE` 分支），也就是没有事件可挂钩。
+
+正常主机（驱动刷屏）下应当**永远**是 `bad = 0`、`oversize`/`stale` 不增长、`dropped = 0`：
+受控测量 20 s 全屏刷新 = 181 笔传输 / 182 次完成 / **0 失败**。
+
+**读计数时的两个坑**：一是每步用 `unbind` 拆驱动会打断在途传输，一轮验收下来 `oversize`
+会涨十几（实测 15），那是拆装的代价、不是故障 —— 判据是 `bad`/`dropped` 保持 0 且
+`submitted == drawn`；二是这些计数器按 MCU 上电清零，所以**只能比前后增量**，不要看绝对值。

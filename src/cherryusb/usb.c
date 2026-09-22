@@ -1,25 +1,44 @@
 #include <string.h>
 
+#include "pico/time.h"
+
 #include "pud.h"
 #include "usb.h"
 #include "decoder.h"
+
+/* Set by the USB event handler: usbd_vendor_ep1_tick() must not arm anything
+ * before the host has configured the interface (see the gate there). */
+static volatile bool s_configured;
 
 void usbd_event_handler(uint8_t busid, uint8_t event)
 {
 	switch (event) {
 	case USBD_EVENT_RESET:
+		s_configured = false;
 		usbd_vendor_ep1_reset();
 		break;
 	case USBD_EVENT_CONNECTED:
 		break;
 	case USBD_EVENT_DISCONNECTED:
+		/* No read survives the bus going away. */
+		s_configured = false;
+		usbd_vendor_ep1_reset();
 		break;
 	case USBD_EVENT_RESUME:
 		break;
 	case USBD_EVENT_SUSPEND:
 		break;
 	case USBD_EVENT_CONFIGURED:
-		/* EP1 is open now: let the host start sending frames */
+		/* EP1 is open now: let the host start sending frames.  The
+		 * configuration request is also what discards whatever the
+		 * device endpoint had queued, so the framing state has to go
+		 * first: with a stale s_ep1.armed, tick() believes a read is in
+		 * flight, arms nothing, and every host bulk write then NAKs
+		 * until the device is power-cycled.  (Measured before this reset
+		 * was added: armed stayed true, got stayed 0, and each transfer
+		 * timed out on the host after 3 s.) */
+		s_configured = true;
+		usbd_vendor_ep1_reset();
 		usbd_vendor_ep1_tick();
 		break;
 	case USBD_EVENT_SET_REMOTE_WAKEUP:
@@ -45,41 +64,85 @@ extern uint8_t ep4_write_buffer[EP4_WR_BUF_SIZE];
  *
  * Flow control: EP1 is armed only while a decoder slot is free -- an un-armed
  * endpoint NAKs, so the host's bulk write waits instead of the frame being
- * dropped.  Only touched from the USB ISR and the decoder task.
+ * dropped.  Only touched from the USB ISR and the decoder task, so it lives in
+ * one object instead of a handful of loose variables: both contexts have to
+ * agree on all of it, and a debugger can print it in one go.
  */
-static volatile bool s_ep1_armed; /* a read is in flight */
-static volatile bool s_ep1_stalled; /* refused a transfer, stall not cleared */
-static volatile uint32_t s_ep1_got; /* bytes of this transfer received */
-static volatile uint32_t s_ep1_total; /* header + payload; 0 until parsed */
-static struct pud_ep1_header s_ep1_hdr;
+static struct {
+	volatile bool armed; /* a read is in flight */
+	volatile bool stalled; /* refused a transfer, stall not cleared */
+	volatile uint32_t got; /* bytes of this transfer received */
+	volatile uint32_t total; /* header + payload; 0 until parsed */
+	volatile uint32_t start_ms; /* when the read last made progress */
+	struct pud_ep1_header hdr;
+} s_ep1;
 
-/* Diagnostics, readable from a debugger; both stay 0 with a matching host. */
-volatile u32 g_ep1_stat_oversize; /* declared more than ep1_read_buffer holds */
-volatile u32 g_ep1_stat_bad; /* no usable header, or a length mismatch */
+/*
+ * How long a transfer may go without a single byte before it is thrown away.  A
+ * host that dies mid-transfer leaves the rest of a payload behind, and whatever
+ * that host sends next would be read as the rest of that payload -- so a
+ * transfer that stops making progress for this long is dropped and the endpoint
+ * re-armed.  The timer follows progress and not the transfer as a whole on
+ * purpose: a legal 64 KB transfer takes about 60 ms at the link's ~1.1 MB/s, but
+ * it may begin at any time after the read was armed, so a deadline measured
+ * from the arming would cut a perfectly good transfer in half.  A host that has
+ * gone away sends nothing at all, so it still trips this.
+ */
+#define EP1_TRANSFER_MAX_MS 500
+
+/* An armed read that has not received a single byte is re-armed after this
+ * long; this is the only recovery from an arm that the controller dropped
+ * (measured after an oversize stall -- see usbd_vendor_ep1_poll()). */
+#define EP1_IDLE_REARM_MS 2000
+
+/* Stamp the last progress: arming the endpoint, and every byte that arrives. */
+static void ep1_mark(void)
+{
+	s_ep1.start_ms = to_ms_since_boot(get_absolute_time());
+}
+
+/* Diagnostics, readable from a debugger; rearm is expected to move while a
+ * matching host is idle, the rest stay 0. */
+volatile struct {
+	u32 oversize; /* declared more than ep1_read_buffer holds */
+	u32 bad; /* no usable header, or a length mismatch */
+	u32 stale; /* an incomplete transfer was dropped */
+	u32 rearm; /* an idle read re-armed by the caretaker */
+} g_ep1_stat;
 
 void usbd_vendor_ep1_reset(void)
 {
-	s_ep1_armed = false;
-	s_ep1_stalled = false;
-	s_ep1_got = 0;
-	s_ep1_total = 0;
+	s_ep1.armed = false;
+	s_ep1.stalled = false;
+	s_ep1.got = 0;
+	s_ep1.total = 0;
+	ep1_mark();
 }
 
 /* Called by the decoder task after releasing a frame slot, and once the device
  * is configured. */
 void usbd_vendor_ep1_tick(void)
 {
-	if (s_ep1_armed || !decoder_slot_free())
+	/* Nothing is open before the host configures the interface, and arming
+	 * an endpoint that early corrupts its state: the read is set up on a
+	 * closed endpoint, and the CONFIGURED tick that follows then sees
+	 * s_ep1.armed already true and skips the real arming -- a device that
+	 * says it is listening while the host times out. */
+	if (!usb_is_configured())
 		return;
 
-	if (s_ep1_stalled) {
-		s_ep1_stalled = false;
+	if (s_ep1.armed || !decoder_slot_free())
+		return;
+
+	if (s_ep1.stalled) {
+		s_ep1.stalled = false;
 		usbd_ep_clear_stall(0, EP1_OUT_ADDR);
 	}
 
-	s_ep1_armed = true;
-	s_ep1_got = 0;
-	s_ep1_total = 0;
+	s_ep1.armed = true;
+	s_ep1.got = 0;
+	s_ep1.total = 0;
+	ep1_mark();
 	usbd_ep_start_read(0, EP1_OUT_ADDR, ep1_read_buffer, EP1_FIRST_READ);
 }
 
@@ -87,22 +150,82 @@ void usbd_vendor_ep1_tick(void)
  * already put its bytes in place, so the payload stays contiguous behind it. */
 static void ep1_read_more(void)
 {
-	uint32_t want = s_ep1_total ? s_ep1_total - s_ep1_got : EP1_FIRST_READ;
+	uint32_t want = s_ep1.total ? s_ep1.total - s_ep1.got : EP1_FIRST_READ;
 
-	s_ep1_armed = true;
-	usbd_ep_start_read(0, EP1_OUT_ADDR, ep1_read_buffer + s_ep1_got, want);
+	s_ep1.armed = true;
+	/* The deadline follows the bytes that arrive (see bulk_out); re-arming is
+	 * not progress, so this does not stamp anything. */
+	usbd_ep_start_read(0, EP1_OUT_ADDR, ep1_read_buffer + s_ep1.got, want);
+}
+
+/*
+ * Caretaker for EP1, called from the decoder task while it waits for work.
+ * Three states leave the endpoint unable to receive; the first two look the
+ * same from the host, where every bulk write NAKs until the device is
+ * power-cycled.
+ *
+ *  - A host that goes away in the middle of a transfer leaves a payload
+ *    outstanding, so a transfer that makes no progress for longer than any
+ *    packet should take is thrown away.  A live transfer refreshes this with
+ *    every packet, so only a silent host can trip it.
+ *  - No read is armed at all.  An oversize transfer stalls EP1 and clears the
+ *    flag without arming the next read, and a read lost some other way would
+ *    look the same; tick() clears the stall latch and arms a fresh read.
+ *  - A read is armed but the controller never queued it.  Measured after the
+ *    oversize stall: tick() clears the stall and arms while the host still has
+ *    its half of the halt set, so the controller drops the read.  The host's
+ *    later CLEAR_FEATURE clears its side, but nothing re-arms, and EP1 then
+ *    NAKs every write forever with armed true and got == 0.  Re-arming from
+ *    time to time is the only recovery usable here, because the core handles
+ *    CLEAR_FEATURE without telling the application (usbd_core.c, standard
+ *    endpoint request).  Without this, one oversized transfer wedges the
+ *    display until it is unplugged -- verified on hardware: the very next
+ *    frame after the host cleared the halt timed out until this branch put the
+ *    read back.
+ *
+ * The re-arm is safe while got == 0: the read still points at the start of
+ * ep1_read_buffer, which is exactly where tick() points it again.  It costs
+ * one reset+arm every 2 s on an otherwise idle bus.
+ *
+ * reset() also drops the stall latch, which is already clear on every path
+ * below: a stalled endpoint is one that has no read armed.
+ */
+void usbd_vendor_ep1_poll(void)
+{
+	uint32_t now = to_ms_since_boot(get_absolute_time());
+
+	if (!s_ep1.armed) {
+		/* Nothing else would: whatever dropped the read is gone. */
+		usbd_vendor_ep1_tick();
+		return;
+	}
+
+	if ((s_ep1.total || s_ep1.got) &&
+	    (uint32_t)(now - s_ep1.start_ms) > EP1_TRANSFER_MAX_MS) {
+		g_ep1_stat.stale++;
+		usbd_vendor_ep1_reset();
+		usbd_vendor_ep1_tick();
+		return;
+	}
+
+	if (!s_ep1.total && !s_ep1.got &&
+	    (uint32_t)(now - s_ep1.start_ms) > EP1_IDLE_REARM_MS) {
+		g_ep1_stat.rearm++;
+		usbd_vendor_ep1_reset();
+		usbd_vendor_ep1_tick();
+	}
 }
 
 /* One transfer is over: either hand the payload to the decoder task or just
  * take the next one. */
 static void ep1_finish(bool submit)
 {
-	uint16_t xs = s_ep1_hdr.xs, ys = s_ep1_hdr.ys;
-	uint16_t xe = s_ep1_hdr.xe, ye = s_ep1_hdr.ye;
-	uint32_t size = s_ep1_hdr.size;
+	uint16_t xs = s_ep1.hdr.xs, ys = s_ep1.hdr.ys;
+	uint16_t xe = s_ep1.hdr.xe, ye = s_ep1.hdr.ye;
+	uint32_t size = s_ep1.hdr.size;
 
-	s_ep1_got = 0;
-	s_ep1_total = 0;
+	s_ep1.got = 0;
+	s_ep1.total = 0;
 
 	if (submit && size) {
 		/* Do not decode here: this runs on the USB interrupt stack. */
@@ -124,20 +247,28 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 	(void)busid;
 	(void)ep;
 
-	s_ep1_armed = false;
+	s_ep1.armed = false;
 
-	if (!nbytes)
+	if (!nbytes) {
+		/* A zero-length packet ends a transfer with nothing in it (a
+		 * host may send one after a transfer whose length is a multiple
+		 * of the packet size).  Returning here left EP1 un-armed with
+		 * nothing to arm it again, so the display only came back after
+		 * a power cycle. */
+		ep1_finish(false);
 		return;
+	}
 
-	s_ep1_got += nbytes;
+	s_ep1.got += nbytes;
+	ep1_mark();
 
-	if (!s_ep1_total) {
+	if (!s_ep1.total) {
 		/* still reading the packet that carries the header */
-		if (s_ep1_got < PUD_EP1_HEADER_SIZE) {
+		if (s_ep1.got < PUD_EP1_HEADER_SIZE) {
 			if (nbytes < EP1_FIRST_READ) {
 				/* short packet: the transfer is over and
 				 * never held a whole header */
-				g_ep1_stat_bad++;
+				g_ep1_stat.bad++;
 				ep1_finish(false);
 			} else {
 				ep1_read_more();
@@ -145,30 +276,30 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 			return;
 		}
 
-		memcpy(&s_ep1_hdr, ep1_read_buffer, sizeof(s_ep1_hdr));
-		s_ep1_total = PUD_EP1_HEADER_SIZE + s_ep1_hdr.size;
+		memcpy(&s_ep1.hdr, ep1_read_buffer, sizeof(s_ep1.hdr));
+		s_ep1.total = PUD_EP1_HEADER_SIZE + s_ep1.hdr.size;
 
-		if (s_ep1_total > EP1_RD_BUF_SIZE) {
+		if (s_ep1.total > EP1_RD_BUF_SIZE) {
 			/* Refuse it loudly.  Stalling EP1 fails the host's
 			 * write instead of dropping the transfer and then
 			 * misparsing whatever follows it. */
-			g_ep1_stat_oversize++;
-			s_ep1_got = 0;
-			s_ep1_total = 0;
-			s_ep1_stalled = true;
+			g_ep1_stat.oversize++;
+			s_ep1.got = 0;
+			s_ep1.total = 0;
+			s_ep1.stalled = true;
 			usbd_ep_set_stall(0, EP1_OUT_ADDR);
 			return;
 		}
 	}
 
-	if (s_ep1_got < s_ep1_total) {
+	if (s_ep1.got < s_ep1.total) {
 		ep1_read_more();
 		return;
 	}
 
-	if (s_ep1_got != s_ep1_total) {
+	if (s_ep1.got != s_ep1.total) {
 		/* the host sent more than it declared */
-		g_ep1_stat_bad++;
+		g_ep1_stat.bad++;
 		ep1_finish(false);
 		return;
 	}
@@ -354,5 +485,5 @@ void usb_device_init()
 
 bool usb_is_configured(void)
 {
-	return true;
+	return s_configured;
 }

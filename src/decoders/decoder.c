@@ -736,7 +736,12 @@ static void decoder_task(void *param)
 	printf("backlight set to 100%%\n");
 
 	for (;;) {
-		xSemaphoreTake(s_decoder_sem, portMAX_DELAY);
+		/* The timed wait doubles as the EP1 caretaker: it recovers a
+		 * transfer whose host went away, and re-arms a read that was
+		 * lost without an event we could see. */
+		if (xSemaphoreTake(s_decoder_sem,
+		                   pdMS_TO_TICKS(EP1_POLL_PERIOD_MS)) != pdTRUE)
+			usbd_vendor_ep1_poll();
 
 		for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 			if (s_frames[i].busy) {

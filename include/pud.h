@@ -102,7 +102,7 @@ struct pud_caps {
  * header (PUD_EP1_HEADER_SIZE <= 64), and then exactly the remaining payload,
  * so the end of a transfer never depends on a short packet.  A host that
  * declares more than frame_max - PUD_EP1_HEADER_SIZE gets its endpoint stalled
- * instead of a truncated frame (g_ep1_stat_oversize).
+ * instead of a truncated frame (g_ep1_stat.oversize).
  */
 #define PUD_EP1_HEADER_SIZE 12
 
