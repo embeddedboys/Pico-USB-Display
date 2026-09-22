@@ -44,6 +44,23 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 - 细节见 [`notes/build-and-flash.md`](notes/build-and-flash.md) 与
   [`notes/debugging.md`](notes/debugging.md)。
 
+## 板子上的工作方式（省时间，都是踩过的坑）
+
+真机验证每一轮都很贵，按这个来：
+
+1. **一轮只做一件事**：脚本先写好，一次 `scp` 上去跑完 —— 不要在一轮里串多次 ssh、
+   gdb、构建。板子一卡，一轮能白等十分钟。
+2. **可能挂住的命令一律套 `timeout`**（`lsusb`、`dmesg`、debugfs 读写、`make`）：
+   USB 栈一卡，`lsusb` 会永远不返回，没有 timeout 就整轮坐在工具自己的上限上。
+   **工具调用自己的超时压到 ≤4 分钟**，挂住要立刻暴露。
+3. **gdb 读固件是 30~60 s 级**的操作（连调试器 + halt 双核 + 读符号）：一轮最多读一次；
+   能用 `dmesg`/`usbmon` 说清就别读。
+4. **固件只编译一次**，产物留在板子上复用。
+5. 板子重启后**总线与路径会变**（`6-1` → `3-1`、usbmon 的 `6u` → `3u`）：脚本里动态
+   发现，别写死。
+6. 下结论前**两侧都要看**：主机 `dmesg`/`usbmon` 与设备侧计数器（gdb）对得上才算数。
+7. **一轮里不要既改代码又做真机验证**：先改完、编译过，再上板。
+
 ## 架构不变量（动了就坏）
 
 1. **解码只能在 `decoder_task` 里做。** 在 `usbd_vendor_ep1_bulk_out()`
