@@ -616,7 +616,21 @@ class Display:
         return min(USB_TRANS_MAX_SIZE, self.frame_max) - EP1_HEADER_SIZE
 
     def _send_rect(self, xs, ys, xe, ye, payload, timeout):
-        """One EP1 transfer: the header, then the payload it describes."""
+        """One EP1 transfer: the header, then the payload it describes.
+
+        The declared length is rounded up to even and the payload padded with a
+        zero byte to match.  The device does not require that any more -- a
+        header with an odd `size` is accepted (measured 2026-09 on RP2350: four
+        odd and four even payloads from 987 to 43271 bytes, all landed with
+        got == total) -- but firmware built before that check was dropped throws
+        an odd size away, counts it in g_ep1_stat.oversize and the host sees
+        *no error at all*.  Padding costs one byte and keeps this client working
+        against either firmware; pud_flush() in the kernel driver rounds the
+        same way.  QOI decoding stops at its end marker, so the trailing byte is
+        never consumed.
+        """
+        if len(payload) & 1:
+            payload = payload + b"\x00"
         self.dev.write(EP1_OUT_ADDR,
                        EP1_HEADER.pack(xs, ys, xe, ye, len(payload)) + payload,
                        timeout=timeout)
