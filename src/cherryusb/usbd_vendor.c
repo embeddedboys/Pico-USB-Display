@@ -47,10 +47,6 @@ struct req_ep2_in {
 static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
                                   uint8_t **data, uint32_t *len)
 {
-	// USB_LOG_WRN("%s, XXX Class request: "
-	//              "bRequest 0x%02x\r\n",
-	//              __func__,
-	//              setup->bRequest);
 	static struct req_ep2_in *req_ep2_in;
 
 	switch (setup->bRequest) {
@@ -58,10 +54,7 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 	 * (protocol v2, see notes/usb-protocol.md).  An old host gets a stall here,
 	 * which is what we want -- silently misparsing its frames would be worse. */
 	case REQ_EP2_IN:
-		usb_hexdump(*data, *len);
 		req_ep2_in = (struct req_ep2_in *)*data;
-		USB_LOG_WRN("cmd: %d, size: %d\n", req_ep2_in->cmd,
-		            req_ep2_in->size);
 		/* The fsm returns how much it actually produced: writing the
 		 * host's requested size instead would leak stale bytes out of
 		 * ep2_write_buffer for a command with a short answer. */
@@ -74,7 +67,6 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 		 * a host that polls instead, and hands it the current report. */
 		return usbd_vendor_ep4_request();
 	default:
-		// USB_LOG_WRN("Unhandled XXX Class bRequest 0x%02x\r\n", setup->bRequest);
 		return -1;
 	}
 
@@ -85,7 +77,6 @@ static void vendor_notify_handler(u8 busid, u8 event, void *arg)
 {
 	switch (event) {
 	case USBD_EVENT_RESET:
-		// USB_LOG_WRN("USBD_EVENT_RESET\r\n");
 		/* the endpoint state is gone with the bus, so an in-flight
 		 * report will never complete */
 		usbd_vendor_ep4_reset();

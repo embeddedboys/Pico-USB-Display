@@ -46,7 +46,6 @@ void usbd_event_handler(uint8_t busid, uint8_t event)
 	case USBD_EVENT_CLR_REMOTE_WAKEUP:
 		break;
 	default:
-		// USB_LOG_WRN("Unhandled event : %d, bus id : %d\n", event, busid);
 		break;
 	}
 }
@@ -296,8 +295,6 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
  * the host asked for cannot leak stale buffer contents past its payload. */
 uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 {
-	/* remember the last command; one byte, not the host's length */
-	pud_set_rw_cmd(&cmd, sizeof(cmd));
 	switch (cmd) {
 	case PUD_CMD_GET_SN:
 		pud_get_ro_sn(ep2_write_buffer, len);
@@ -344,12 +341,17 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 	return len;
 }
 
-/* TODO: ep3 */
-
+/*
+ * EP2 IN completion.  The reply was handed to the endpoint in
+ * vendor_request_handler(), which is also where the vendor protocol lives, so
+ * there is nothing left to do here -- the callback exists because CherryUSB
+ * needs one per endpoint.
+ */
 void usbd_vendor_ep2_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
-	// uint8_t cmd = g_udd_data.cmd;
-	// USB_LOG_INFO("%s, cmd : %02x, len : %d\n", __func__, cmd, nbytes);
+	(void)busid;
+	(void)ep;
+	(void)nbytes;
 }
 
 /*
@@ -450,8 +452,6 @@ struct usbd_interface intf0;
 
 void usb_device_init()
 {
-	USB_LOG_WRN("%s\n", __func__);
-
 	/* so a host can tell "touch is implemented" (version != 0) before
 	 * anybody has touched the panel */
 	usbd_vendor_ep4_reset();
