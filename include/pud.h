@@ -133,9 +133,6 @@ struct disp_data {
 };
 
 struct tp_data {
-	bool is_pressed;
-	u16 x;
-	u16 y;
 	u8 polling_period;
 };
 
@@ -177,7 +174,6 @@ struct pud_touch_report {
 
 struct pud_data {
 	u8 sn[8];
-	u16 cmd;
 
 	struct disp_data disp;
 	struct tp_data tp;
@@ -187,20 +183,14 @@ extern struct pud_data g_pud_data;
 
 void pud_init(void);
 
+/* Reads/writes below are clamped to the field, so an EP2 request can ask for
+ * less than the whole field but never past it.  Only the ones a caller exists
+ * for are declared; the EP2 replies read g_pud_data directly. */
 void pud_get_ro_sn(u8 *ptr, int len);
-
-void pud_set_rw_cmd(u8 *ptr, int len);
-void pud_get_rw_cmd(u8 *ptr, int len);
 
 void pud_get_ro_disp_xres(u16 *ptr, int len);
 void pud_get_ro_disp_yres(u16 *ptr, int len);
-void pud_get_ro_disp_rotation(u8 *ptr, int len);
 void pud_get_ro_disp_pixelclock_khz(u16 *ptr, int len);
-void pud_get_ro_disp_bpp(u8 *ptr, int len);
-void pud_get_ro_disp_intf_type(u8 *ptr, int len);
-
-void pud_get_rw_tp_polling_period(u8 *ptr, int len);
-void pud_set_rw_tp_polling_period(u8 *ptr, int len);
 
 /* One touch poll: refresh g_pud_data.tp and push an EP4 report if there is
  * something to say.  Called from the indev task every polling_period ms. */

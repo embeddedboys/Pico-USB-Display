@@ -30,27 +30,15 @@ struct pud_data g_pud_data = { 0 };
 
 /*
  * The length is clamped to the field: these are fed from the host's EP2 request
- * (`struct req_ep2_in.size`), and the old code copied it verbatim into a fixed
- * field, so an 8 byte query wrote 6 bytes past `cmd` and into `disp` (measured:
- * every query left g_pud_data.disp as garbage), and a large one would have
- * walked through RAM.
+ * (`struct req_ep2_in.size`), and an older version copied it verbatim into a
+ * fixed field, so an 8 byte query wrote past the target and a large one would
+ * have walked through RAM.
+ *
+ * Only the getters a caller exists for are generated.  The EP2 reply builds its
+ * struct from g_pud_data directly, so per-field setters would be dead code
+ * (they were: cmd, rotation, bpp, intf_type and tp.polling_period had no
+ * caller at all) -- add one back together with its caller.
  */
-#define define_pud_rw_attr(field, field_type)             \
-	void pud_get_rw_##field(field_type *ptr, int len) \
-	{                                                 \
-		struct pud_data *data = &g_pud_data;      \
-		if (len > (int)sizeof(data->field))       \
-			len = (int)sizeof(data->field);   \
-		memcpy((void *)ptr, &data->field, len);   \
-	}                                                 \
-	void pud_set_rw_##field(field_type *ptr, int len) \
-	{                                                 \
-		struct pud_data *data = &g_pud_data;      \
-		if (len > (int)sizeof(data->field))       \
-			len = (int)sizeof(data->field);   \
-		memcpy(&data->field, (void *)ptr, len);   \
-	}
-
 #define define_pud_ro_attr(field, field_type)             \
 	void pud_get_ro_##field(field_type *ptr, int len) \
 	{                                                 \
@@ -58,22 +46,6 @@ struct pud_data g_pud_data = { 0 };
 		if (len > (int)sizeof(data->field))       \
 			len = (int)sizeof(data->field);   \
 		memcpy((void *)ptr, &data->field, len);   \
-	}
-
-#define define_pud_rw_sub_attr(parent, field, field_type)            \
-	void pud_get_rw_##parent##_##field(field_type *ptr, int len) \
-	{                                                            \
-		struct pud_data *data = &g_pud_data;                 \
-		if (len > (int)sizeof(data->parent.field))           \
-			len = (int)sizeof(data->parent.field);       \
-		memcpy((void *)ptr, &data->parent.field, len);       \
-	}                                                            \
-	void pud_set_rw_##parent##_##field(field_type *ptr, int len) \
-	{                                                            \
-		struct pud_data *data = &g_pud_data;                 \
-		if (len > (int)sizeof(data->parent.field))           \
-			len = (int)sizeof(data->parent.field);       \
-		memcpy(&data->parent.field, (void *)ptr, len);       \
 	}
 
 #define define_pud_ro_sub_attr(parent, field, field_type)            \
@@ -85,17 +57,11 @@ struct pud_data g_pud_data = { 0 };
 		memcpy((void *)ptr, &data->parent.field, len);       \
 	}
 
-define_pud_rw_attr(cmd, u8);
 define_pud_ro_attr(sn, u8);
 
 define_pud_ro_sub_attr(disp, xres, u16);
 define_pud_ro_sub_attr(disp, yres, u16);
-define_pud_ro_sub_attr(disp, rotation, u8);
 define_pud_ro_sub_attr(disp, pixelclock_khz, u16);
-define_pud_ro_sub_attr(disp, bpp, u8);
-define_pud_ro_sub_attr(disp, intf_type, u8);
-
-define_pud_rw_sub_attr(tp, polling_period, u8);
 
 static void pud_hexdump(void *ptr, int len)
 {
@@ -175,7 +141,6 @@ void pud_touch_poll(void)
 {
 	static bool was_pressed;
 	static u8 seq;
-	struct pud_data *data = &g_pud_data;
 	struct pud_touch_report report;
 	bool pressed = indev_is_pressed();
 	u16 x = 0, y = 0;
@@ -195,10 +160,6 @@ void pud_touch_poll(void)
 		if (y >= TFT_VER_RES)
 			y = TFT_VER_RES - 1;
 	}
-
-	data->tp.is_pressed = pressed;
-	data->tp.x = x;
-	data->tp.y = y;
 
 	if (!pressed && !was_pressed)
 		return; /* idle, and it already knows */
