@@ -71,16 +71,19 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | 脚本 | 作用 | 依赖 |
 | --- | --- | --- |
 | `img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
-| `video_player.py` | 播放视频（不落盘） | ffmpeg |
+| `video_player.py` | 播放视频（不落盘，`--codec` 同上） | ffmpeg |
 | `fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
 | `touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
 | `touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
-| `lz4_img_viewer.py` | 同上，LZ4 专用名字（需 `DECODER_TYPE=2`）；**分带**由 `pud_usb` 负责 | lz4 |
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
 | `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
+
+> 发图统一走 `img_viewer.py`，LZ4 用 `img_viewer.py --codec lz4` —— 原来那个
+> `lz4_img_viewer.py` 与它完全重复（脚本自己的 docstring 就写了"`--codec lz4` does the
+> same thing"），已删；同样需要 `DECODER_TYPE=2` 的固件，脚本会先读 caps 校验再发。
 
 典型用法：
 
@@ -158,7 +161,7 @@ release，四角落点 (0,0)、(475,0)、(475,319)、(0,314)，横拖只变 x、
 sequence 全程只跳 2 次，**板子没有挂**。同一批数据在 [usb-protocol.md](usb-protocol.md)
 的 EP4 一节里也记了一份。
 
-**默认限速**：`--rate 20`（每秒最多 20 次面板更新）。报告是 33 ms 一个（30/s），到得比
+**默认限速**：`--rate 20`（每秒最多 20 次面板更新）。报告是 8 ms 一个（≈125 Hz），到得比
 `--rate` 快的报告会被合并进下一次更新 —— 画布内容不丢，只是传输延后。`--gap-ms` 默认
 **0**：2026-09 无调试器复测（3000/6000 × 32×32 与 150/300 帧桌面负载，都是 gap 0）
 全部 `errors=0`、`CFSR`/`HFSR` 为 0，"小传输连发会挂"不成立，见 [todo.md](todo.md) 第 8 条。
@@ -188,7 +191,7 @@ GNOME/Wayland 的坑）、两套真实内容（整屏缩放到 480×320 / 4K 里
 ## 固件侧配合的注意事项
 
 - 默认 `DECODER_TYPE=3`（QOI）。图片/视频脚本都按 QOI 发；换成 `2`（LZ4）才能用
-  `lz4_img_viewer.py`，换成 `0`/`1`（tjpgd / JPEGDEC）才能收 JPEG —— 发错格式不会崩，
+  `img_viewer.py --codec lz4`，换成 `0`/`1`（tjpgd / JPEGDEC）才能收 JPEG —— 发错格式不会崩，
   但屏幕上不动。**JPEG 只能整屏发（`x = y = 0`）**：JPEGDEC 在 `x != 0` 时会卡死显示，
   见 [decoders.md](decoders.md)。仓库里没有发 JPEG 的脚本，测试直接用
   `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。**LZ4 必须分带**（`band_pixels`），
@@ -303,7 +306,50 @@ python3 scripts/check_pudcodec.py     # 全部通过才返回 0
   4.4.5 带的是 1.9.x，同一条 band **8 条里有 3 条**压缩结果不同（都合法）。设备只解压，
   `LZ4_decompress_safe` 与版本无关；两条来源的码流**都在板上验证过像素精确**
   （工具生成的 bootlogo 资产、`pud_usb.lz4_encode` 发的帧）。要比字节就固定同一个
-  liblz4 版本。
+  liblz4 版本。**因此 `check_pudcodec.py` 的 `python encoder agrees, band for band`
+  一项在 1.9.x 的 wheel 上必然 FAIL**（2026-09-26 实测：8 条里 5 条字节相同、3 条不同，
+  但**8 条解出来都与原像素精确一致**）—— 这一项比上面的结论更严，别当成回归。
 
 > RGB565 的打包用**截断**（`r >> 3`）而不是四舍五入，跟 `pud_usb.py` 保持一致 ——
 > 这是两条主机路径能逐字节对拍的前提。
+
+### 开发机上的一次完整验证（2026-09-26，x86_64 原生 Linux）
+
+环境：Ubuntu 24.04、Python 3.12 + 仓库内 `.venv`（pyusb 1.3.1 / Pillow 12.3.0 /
+numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0666）、
+设备 `2e8a:0001`（固件 SN `0xb88c421616219e64`）。全部命令都在仓库根目录下跑。
+
+| 命令 | 结果 |
+| --- | --- |
+| `python3 scripts/pud_usb.py` | 自检通过；QOI/RLE 与 C 库参考向量一致，band limit 报 **21835**；没有 numpy 时自动走纯 Python 打包路径 |
+| `python3 scripts/check_pudcodec.py` | 28 项断言 **27 通过**，唯一 FAIL 是上面那条已知的 LZ4 版本差异 |
+| `pud_usb.open_device()`（读 caps） | `proto 2 / frame_max 65536 / decoder 3 / band_pixels 21835`；面板 `480x320 rotation 1 16bpp 50000kHz touch poll 10ms 70x40mm touch True` —— 与固件/驱动文档**逐字段一致** |
+| `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg` | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
+| `ep1_out_speed_test.py` | 8~320 行的每个尺寸都是 **~0.816 MB/s** 一条平线 |
+| `fps_bench.py --full --frames 20` | photo **6.19 fps**、noise **1.83 fps**，判定都是 `USB 受限` |
+| `video_player.py --xres 480 --yres 320 --fps 15 --no-loop test.mp4` | `75 frames in 5.1 s -> 14.6 fps, 0.37 MB/s`（目标 15 fps，基本实时；片源是 `ffmpeg -f lavfi -i testsrc=size=480x320:rate=15 -t 5 …` 造的） |
+| `desktop_codecs.py --device --codec qoi --frames 20` | 全屏 93893 B → **117.63 ms**；八个区域的带宽都是 **~0.80 MB/s** |
+| `codec_compare.py --codec qoi --frames 20` | solid 265.4 fps / gradient 24.2 / photo 6.1 / noise 1.8 —— 与 `fps_bench` 的同一批数字**一致** |
+| `xorg_desktop_share.py --frames 30 --stats` | `30 frames in 5.7 s -> 5.2 fps, 0.06 MB/s`；日志里**只发脏矩形**（`last 6x6 at 223,14`、`239x274 at 0,23` …） |
+| `touch_draw.py --seconds 5`（无人触摸） | 画布推上去 `2610 B / 13.5 ms`，0 报告、`rc=0` —— **空闲场景处理正确**（与 `touch_test.py` 相反） |
+| `touch_test.py --mode poll` | **`version = 1`** —— 固件确实上报触摸 |
+| `touch_test.py`（push，**有人触摸**） | x `159..342` / y `162..225`、报告间隔中位 **8.0 ms**（≈125 Hz）、**exit 0** —— 与 [usb-protocol.md](usb-protocol.md) 的实测一致 |
+| `touch_test.py`（push，**面板空闲**） | 0 报告 → 打印 "this firmware does not report touch (EP4 is still a stub)" 并 **exit 1** |
+
+两个要注意的（都不是设备的问题）：
+
+- **`touch_test.py` 的 push 模式在"面板空闲"时会误报**：没人碰时收不到报告，脚本据此断定
+  "固件不支持触摸"（`scripts/touch_test.py` 结尾那段），而本机 `caps['touch']` 是 True、
+  poll 模式拿到了 `version = 1`、真去摸面板也能立刻收到 8.0 ms 间隔的报告并正常退出。
+  判据应该用 caps 的 `touch` 位（或先 poll 一次）来区分"没人碰"和"没实现"；现在空闲场景下
+  的文案和 exit 1 是**假阴性**。另外 `--mode poll` 每条报告后固定 200 ms 的间隔是脚本自己的
+  `sleep(idle_timeout)`，不是设备节奏。
+- **吞吐 0.816 MB/s 比在 RK3588 开发机上量到的 1.13 MB/s 低约 28%** —— 这是**主机/拓扑差异**，
+  不是设备性能：本机（x86）的 USB 拓扑里 Pico 挂在**一级 480M hub 下面**
+  （`lsusb -t`：`3-1 → Port 3 → Dev 071`，设备本身是 12M 全速），也就是全速设备要经
+  hub 的 **TT**；上一台机器是直连。本仓此前已确认这类差值出在总线/主机侧
+  （见 [pitfalls.md](pitfalls.md) 的双缓冲一节），这里也没有设备侧的异常迹象 ——
+  但**没有做"直连 vs 经 hub"的 A/B**，所以 TT 只是最合理的解释，未验证。
+  另一条独立佐证：同一份"桌面式全屏"内容（**93893 B**）在 LVGL 模板 README 里记的是
+  **89 ms ≈ 1.05 MB/s**（RK3588 上量的），本机 `desktop_codecs.py --device --codec qoi`
+  跑同一份是 **117.63 ms（0.80 MB/s）**。
