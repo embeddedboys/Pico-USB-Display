@@ -185,7 +185,7 @@ case REQ_EP2_IN:
 | cmd | 名称 | 动作 |
 | --- | --- | --- |
 | `0x01` | `PUD_CMD_GET_SN` | `pud_get_ro_sn(ep2_write_buffer, len)` 填 8 字节唯一 ID，返回 `len`（行为不变） |
-| `0x02` | `PUD_CMD_GET_CAPS` | 填 `struct pud_caps`（28 B），返回 `min(len, 28)` |
+| `0x02` | `PUD_CMD_GET_CAPS` | 填 `struct pud_caps`（**32 B**：16 字节头 + 面板参数），返回 `min(len, sizeof(caps))` |
 | 其他 | — | 返回 **0**（发零长度包），主机侧读回短包 → 判定"不支持" |
 
 ### `PUD_CMD_GET_CAPS`（设备能力 + 面板参数）
