@@ -116,21 +116,21 @@ Pico 提供了一个引导加载程序，可以轻松地将固件烧录到 Pico 
 python3 -m venv .venv
 source .venv/bin/activate
 
-pip install pyusb opencv-python numpy
+pip install pyusb Pillow numpy     # numpy 只有 codec_compare/fps_bench/check_pudcodec 需要
 ```
 
 如果您想在 pico 显示器上显示图片：
 ```bash
-# 用法: ./scripts/img_viewer.py [xres] [yres] <file.jpg>
+# 用法: ./scripts/img_viewer.py [--xres N] [--yres N] <file.jpg>
 
-./scripts/img_viewer.py 480 320 ~/Pictures/artplayer_19_21.png
+./scripts/img_viewer.py --xres 480 --yres 320 ~/Pictures/artplayer_19_21.png
 ```
 
 或者您想在 pico 显示器上播放视频：
 ```bash
-# 用法: ./scripts/video_player.py [xres] [yres] [quality|1-100] <video.mp4>
+# 用法: ./scripts/video_player.py [--xres N] [--yres N] [--fps N] [--codec qoi|rle|lz4] <video.mp4>
 
-./scripts/video_player.py 480 320 50 ~/Videos/jazz_15fps.mp4
+./scripts/video_player.py --xres 480 --yres 320 --fps 15 ~/Videos/jazz_15fps.mp4
 ```
 
 您可能还想知道如何将视频设置为 15fps：
