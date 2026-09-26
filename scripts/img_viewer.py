@@ -35,7 +35,7 @@ Options:
 Examples:
     ./scripts/img_viewer.py assets/xfce.jpg
     ./scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 \\
-        assets/bootlogo.jpg
+        assets/bootlogo.png
     ./scripts/img_viewer.py --codec lz4 assets/xfce.jpg     # DECODER_TYPE=2
 '''
 

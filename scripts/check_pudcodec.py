@@ -102,7 +102,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="pudcodec-"))
 
     photo = tmp / "photo.png"
-    Image.open(REPO / "assets" / "bootlogo.jpg").save(photo)
+    Image.open(REPO / "assets" / "bootlogo.png").save(photo)
     noise = tmp / "noise.png"
     Image.fromarray(np.random.default_rng(7).integers(
         0, 256, (H, W, 3), dtype=np.uint8)).save(noise)
