@@ -112,6 +112,12 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 或 gdb 写内存）引起的 —— **未验证**。上桌面重负载前值得再确认一次：跑完读 `HFSR`/`CFSR`，
 非 0 就按 [debugging.md](debugging.md) 的步骤抓 PSP 帧。
 
+**2026-09-26 补充（第二次现场，签名不同）**：原生 Linux 上做了一次**完全干净的 gdb 只读会话**
+（无断点、无写内存、gdb 正常退出），之后同样出现 HardFault，但这次是
+`CFSR = 0x00080000`（NOCP，且在 Handler 里升级、帧里没有 FP 上下文），与上面那次
+`0x8200` 的现场不是同一个签名。同一轮里只用 openocd 的 halt/读/resume（不挂 gdb）没触发。
+现场、解读与恢复过程见 [debugging.md](debugging.md) 的"一次未定因的 HardFault"一节。
+
 ## 9. 量一下 JPEG 路径到底卡在设备还是链路
 
 JPEGDEC 的载荷最小（一张全屏 JPEG 大概 20~40 KB，链路只要 ~30 ms），但解码重，所以它很可能是

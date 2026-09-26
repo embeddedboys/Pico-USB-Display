@@ -17,6 +17,11 @@ Pico (RP2350)  ──CMSIS-DAP──►  Windows 宿主机 (OpenOCD :3333 / teln
 openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 10000"
 ```
 
+**原生 Linux 开发机不需要 Windows/WSL 这一层**（2026-09 实测）：调试器直接挂在开发机上时，
+OpenOCD 就跑在本机，`gdb-multiarch` 连 `localhost:3333` 即可（实测 `1a86:7021`
+XV-Link CMSIS-DAP **v2**、`/usr/local/bin/openocd` 0.12.0），gdb 侧命令与上面两种接法完全相同。
+注意 openocd 0.12 把两个核当成 SMP 组，见下面"halt/resume 的坑"。
+
 - `3333` = gdb 端口
 - `4444` = telnet 端口（可直接发 `monitor` 命令）
 
@@ -63,6 +68,35 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
 
 > 走断点调试（`monitor reset halt` → 断点 → `continue`）之后再 `reset run`，
 > 最容易踩到这个；最稳的是直接重烧一次。
+
+### halt/resume 的坑：两个核是一个 SMP 组（2026-09 实测）
+
+openocd 0.12 的 `rp2350.cfg` 把 `rp2350.cm0` / `rp2350.cm1` 当成**一个 SMP 组**：`resume`
+会试着把整组一起放开，只要有一个成员不在停机状态就失败：
+
+```
+Error: [rp2350.cm1] not halted
+Warn : [rp2350.cm0] resume of a SMP target failed, trying to resume current one
+Error: [rp2350.cm0] resume failed
+```
+
+**失败的 resume 什么都不会恢复** —— 已经被 `halt` 的那个核就留在停机状态（主机侧表现就是
+"设备不响应"，很像固件挂死，但 flash 内容没坏）。
+
+正确顺序是**先让整组都停，再整组放开**：
+
+```tcl
+targets rp2350.cm0
+halt
+targets rp2350.cm1
+halt
+targets rp2350.cm0
+resume
+```
+
+自查 `targets` 的 State 列：halt 过的目标写 `halted due to debug-request`（停在 pico-sdk 那个
+`bkpt` stub 上时是 `halted due to breakpoint`）；**新会话里显示 `unknown` 是"运行中"的正常
+显示**，不是错误 —— 别把它当成挂死。
 
 ## 解码流水线诊断
 
@@ -188,6 +222,27 @@ pxCurrentTCBs[0] = "IDLE0"，pxStack = 0x20037880（256 words）
 而且有几个 gdb 会话是被 `timeout` 杀掉的（gdb 被杀会把核留在停机状态）—— 这两件事都足以把核
 带到不一致的状态，是当前最可疑的来源。**存疑，未验证**；再遇到时按上面的步骤先抓 PSP 帧和
 `g_usbd_core` 里那组回调指针，看是哪一个槽被改了。
+
+**第二次现场（2026-09-26，原生 Linux，签名不同）**：只做了一次完全"干净"的 gdb 会话 ——
+attach → 读三个计数器 → `monitor resume` → `detach`，没有断点、没有写内存、gdb 正常退出 ——
+之后 openocd 日志里 cm0 就停在 `Handler HardFault`：
+
+```
+CFSR  = 0x00080000 → UFSR.NOCP：在协处理器/FPU 关闭时执行了协处理器指令
+HFSR  = 0x40000000 → FORCED
+PC    = 0x1000011c → pico-sdk 默认 HardFault stub（内含 bkpt，所以 openocd 报
+                     "halted due to breakpoint"）
+LR    = 0xfffffff1 → 从 **Handler 模式**升级上来，且帧里没有 FP 上下文
+IPSR  = 3；MMFAR/BFAR = 0x20081f0c（两个 VALID 位都没置 → 值无意义）
+```
+
+与上一次（`0x8200` 精确访问错、线程模式、PSP 帧里是"从数据取指"的现场）**不是同一个签名**：
+这次是 Handler 里升级的 NOCP，**没有压 FP 上下文**。同一轮里只用 openocd 做过三次
+halt/读/resume（不挂 gdb）全都没触发，只有 gdb attach 那次出了 —— 指向**调试器对完整上下文
+（含 FP/协处理器状态）的保存与恢复**，而不是固件自己的逻辑；仍**未定因**。
+
+恢复：用上面"恢复卡死的板子"的 `monitor reset halt` → `sleep 2` → `monitor reset run`，
+一次成功；主机看到干净的断开/重连（设备号 069 → 070），**flash 内容未变**。
 
 ## 任务栈水位与栈保护
 
