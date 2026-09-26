@@ -3,7 +3,7 @@
 ## 定位
 
 固件让一块 **RP2350（Pico 2）** 充当 USB 显示器：主机把压缩后的图像流从 USB 发过来，
-固件解码并通过 PIO 驱动的 8080 并口刷到 TFT 上。反向提供（目前打桩的）触摸通道。
+固件解码并通过 PIO 驱动的 8080 并口刷到 TFT 上。反向还有一条触摸通道（EP4，设备主动推送）。
 
 ## 平台
 
@@ -137,7 +137,7 @@ main()                                        main.c
 | 任务 | 栈 | 优先级 | 核 | 职责 |
 | --- | --- | --- | --- | --- |
 | `usb_task` | 256 | idle + 3 | core 0（绑定） | `usb_device_init()`，等枚举完成后 **`vTaskSuspend(NULL)`**；USB 中断处理回调 |
-| `indev_read` | 256 | idle + 0 | 未绑定 | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建），每 33 ms 一次，采样经 EP4 推给主机 |
+| `indev_read` | 256 | idle + 0 | 未绑定 | 触摸轮询（`INDEV_DRV_NOT_USED` 控制是否创建），每 10 ms 一次，采样经 EP4 推给主机 |
 | `decoder_task` | **1024** | idle + 1 | 未绑定 | 开机 logo（只画一次，见下）+ 真正的解码 + 刷屏（在 `decoder_init()` 里创建） |
 | `Tmr Svc` | 256 | `configMAX_PRIORITIES - 1` | 未绑定 | 内核软件定时器任务；**本工程没有创建任何软件定时器**，它只是空转 |
 
