@@ -10,10 +10,13 @@
 Display a still image on the Pico USB Display.
 
 Images are decoded with Pillow (or opencv-python if Pillow is missing),
-converted to RGB565, compressed with QOI and sent over EP1 -- the same
-pipeline the kernel driver uses.
+converted to RGB565, compressed with the codec the device is built for
+(--codec, default qoi) and sent over EP1 -- the same pipeline the kernel
+driver uses; banding is `pud_usb.send_rgb565()`'s job.
 
-Requires firmware built with DECODER_TYPE=3 (QOI), which is the default.
+The device has to be built with the matching DECODER_TYPE (see
+notes/scripts.md); this checks the capability report and refuses to send a
+codec the device would drop without an error.
 
 Usage:
     ./scripts/img_viewer.py [options] <image>
@@ -26,12 +29,14 @@ Options:
     --x X, --y Y    place the window at (X,Y) instead of the top-left corner
     --stretch       fill the window instead of preserving the aspect ratio
     --repeat N      send the frame N times (default 1)
+    --codec NAME    what the device is built for: qoi (default), lz4, rle
     --timer         print per-send timing
 
 Examples:
     ./scripts/img_viewer.py assets/xfce.jpg
     ./scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 \\
         assets/bootlogo.jpg
+    ./scripts/img_viewer.py --codec lz4 assets/xfce.jpg     # DECODER_TYPE=2
 '''
 
 import argparse
@@ -72,6 +77,12 @@ def main():
 
         with pud_usb.open_device() as disp:
             disp.width, disp.height = args.xres, args.yres
+            want = pud_usb.DECODER_TYPES[args.codec]
+            if disp.decoder_type is not None and disp.decoder_type != want:
+                sys.exit("the device reports decoder_type=%s, not %d (%s); "
+                         "rebuild it with DECODER_TYPE=%d or pass a matching "
+                         "--codec"
+                         % (disp.decoder_type, want, args.codec, want))
             total = 0
             for _ in range(args.repeat):
                 bands, nbytes, secs = disp.send_rgb565(

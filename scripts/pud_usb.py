@@ -327,6 +327,17 @@ ENCODERS = {
     "lz4": lz4_encode,
 }
 
+#: The DECODER_TYPE each of those needs on the device -- a protocol field
+#: (`PUD_CMD_GET_CAPS` reports the device's own, see notes/usb-protocol.md).
+#: 0 is tjpgd, 1 is JPEGDEC (both JPEG, the host only ever sends whole frames);
+#: 3 QOI and 4 RLE are the default paths, 2 is LZ4 (banded, see lz4_encode).
+DECODER_TYPES = {
+    "jpeg": 1,
+    "lz4": 2,
+    "qoi": 3,
+    "rle": 4,
+}
+
 
 # ---------------------------------------------------------------------------
 # Pixels

@@ -182,7 +182,7 @@ def main():
             print("device caps=%s  mode=%s  codec=%s"
                   % (disp.caps, args.mode, args.codec))
             if disp.decoder_type is not None:
-                want = {"jpeg": 1, "lz4": 2, "qoi": 3, "rle": 4}[args.codec]
+                want = pud_usb.DECODER_TYPES[args.codec]
                 if disp.decoder_type != want:
                     sys.exit("the device is decoder_type=%s, not %d (%s); "
                              "rebuild it or pass a matching --codec"

@@ -12,8 +12,11 @@
 Play a video on the Pico USB Display.
 
 Frames are decoded by ffmpeg through a rawvideo pipe and re-compressed as
-RGB565 QOI on the fly, so nothing is written to disk and no python video
-binding is needed. Requires firmware built with DECODER_TYPE=3 (QOI).
+RGB565 with the codec the device is built for (--codec, default qoi) on the
+fly, so nothing is written to disk and no python video binding is needed.
+Each frame is banded by `send_rgb565()` (that is what the device's decoder
+expects, for every codec), and the capability report is checked first so a
+codec the device would silently drop is refused instead.
 
 Note the two limits this script cannot beat:
   * full-screen QOI of photo-like content is around 120 KB, and the link
@@ -30,6 +33,7 @@ Options:
     --frames N           stop after N frames
     --no-loop            play once instead of looping
     --stretch            stretch to the panel instead of letterboxing
+    --codec NAME         what the device is built for: qoi (default), lz4, rle
     --stats              print a timing line every second
 
 Examples:
@@ -57,6 +61,8 @@ def main():
                     help="stop after this many frames")
     ap.add_argument("--no-loop", action="store_true")
     ap.add_argument("--stretch", action="store_true")
+    ap.add_argument("--codec", default="qoi", choices=sorted(pud_usb.ENCODERS),
+                    help="what the device is built for (DECODER_TYPE)")
     ap.add_argument("--stats", action="store_true")
     args = ap.parse_args()
 
@@ -66,6 +72,12 @@ def main():
     try:
         with pud_usb.open_device() as disp:
             disp.width, disp.height = args.xres, args.yres
+            want = pud_usb.DECODER_TYPES[args.codec]
+            if disp.decoder_type is not None and disp.decoder_type != want:
+                sys.exit("the device reports decoder_type=%s, not %d (%s); "
+                         "rebuild it with DECODER_TYPE=%d or pass a matching "
+                         "--codec"
+                         % (disp.decoder_type, want, args.codec, want))
             played = 0
             t_start = time.perf_counter()
             t_report = t_start
@@ -77,7 +89,7 @@ def main():
                                                 fit=not args.stretch):
                     t0 = time.perf_counter()
                     rgb565 = pud_usb.rgb888_to_rgb565(raw, args.xres, args.yres)
-                    _, nbytes, _ = disp.send_full(rgb565)
+                    _, nbytes, _ = disp.send_full(rgb565, codec=args.codec)
                     bytes_sent += nbytes
                     played += 1
 

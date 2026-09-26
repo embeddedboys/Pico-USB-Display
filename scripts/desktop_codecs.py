@@ -56,8 +56,6 @@ REGIONS = [
     ("full screen", (0, 0, W, H)),
 ]
 
-DECODER_TYPE = {"jpeg": 1, "lz4": 2, "qoi": 3, "rle": 4}
-
 
 # ---------------------------------------------------------------------------
 # The workload
@@ -227,7 +225,7 @@ def device_table_px(args, px):
     import fps_bench as B
 
     with P.open_device() as disp:
-        want = DECODER_TYPE[args.codec]
+        want = P.DECODER_TYPES[args.codec]
         if disp.decoder_type is not None and disp.decoder_type != want:
             sys.exit("device reports decoder_type=%s, need %d (%s); rebuild it"
                      % (disp.decoder_type, want, args.codec))
