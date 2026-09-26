@@ -320,7 +320,7 @@ python3 scripts/check_pudcodec.py     # 全部通过才返回 0
 
 环境：Ubuntu 24.04、Python 3.12 + 仓库内 `.venv`（pyusb 1.3.1 / Pillow 12.3.0 /
 numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0666）、
-设备 `2e8a:0001`（固件 SN `0xb88c421616219e64`）。全部命令都在仓库根目录下跑。
+设备 `2e8a:0001`（固件 SN `0xb88c42…`）。全部命令都在仓库根目录下跑。
 
 | 命令 | 结果 |
 | --- | --- |
