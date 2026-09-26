@@ -80,6 +80,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
 | `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
+| `mkbootlogo.py` | 从 `assets/bootlogo.png` 重新生成 `include/bootlogo.h`（四个分支，落盘前自校验；`--check` 只比对） | 无（需 `tools/build/pudcodec`） |
 
 > 发图统一走 `img_viewer.py`，LZ4 用 `img_viewer.py --codec lz4` —— 原来那个
 > `lz4_img_viewer.py` 与它完全重复（脚本自己的 docstring 就写了"`--codec lz4` does the
@@ -89,7 +90,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 
 ```bash
 python3 scripts/img_viewer.py assets/xfce.jpg
-python3 scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 assets/bootlogo.jpg
+python3 scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 assets/bootlogo.png
 python3 scripts/video_player.py --fps 8 --frames 200 ~/Videos/jazz.mp4
 python3 scripts/fps_bench.py --frames 200
 python3 scripts/fps_bench.py --dry-run          # 不接设备也能看各用例载荷大小
@@ -266,18 +267,19 @@ band 缓冲（43678 B）且能整除图像高度"的最大行数，这样 band �
 `block 数 / 图像高度` 推回来，`s2img` 与固件的开机 logo 才能重建。
 `video2s --codec lz4` 对每一帧都这样分带，容器是**扁平的**（帧优先，一帧内自上而下）。
 
-开机 logo 的 LZ4 分支就是这么生成的（`assets/bootlogo.jpg` 经无损 PNG 再转裸 RGB565）：
+开机 logo 的四个分支（jpeg / lz4 / qoi / rle）都由 `scripts/mkbootlogo.py` 从同一个资产
+重新生成：
 
 ```bash
-python3 -c "from PIL import Image; Image.open('assets/bootlogo.jpg').save('/tmp/logo.png')"
-python3 -c "
-import sys; sys.path.insert(0, 'scripts'); import pud_usb as P
-open('/tmp/logo.raw','wb').write(P.rgb888_to_rgb565(P.load_image('/tmp/logo.png',480,320,fit=False),480,320))"
-tools/build/pudcodec --codec lz4 video2s --raw /tmp/logo.raw -w 480 -h 40 -t bin -o /tmp/logo.lz4.bin
+cmake -S tools -B tools/build && cmake --build tools/build   # 先有工具
+python3 scripts/mkbootlogo.py            # 重写 include/bootlogo.h
+python3 scripts/mkbootlogo.py --check    # 只比对，不改文件
 ```
 
-再把这串字节替换进 `include/bootlogo.h` 的 `#elif DECODER_TYPE == 2` 段
-（`check_pudcodec.py` 会验证这个分支与工具的产物逐字节相同）。
+资产必须是**无损**的（现在是 `assets/bootlogo.png`）：`check_pudcodec.py` 第 7 项会拿
+Pillow 解出的像素重压一遍再和分支逐字节比，JPEG 源会因两套解码器的 IDCT 舍入不同而失败。
+脚本只重写每个分支的字节行（标记、注释、声明都不动），**落盘前先反解回来与工具的产物逐字节
+比对** —— 这个文件曾被一次批量替换清空过（AGENTS.md 第 8 条）。
 
 ## 与固件/脚本的一致性（2026-09 实测）
 
@@ -300,8 +302,9 @@ python3 scripts/check_pudcodec.py     # 全部通过才返回 0
 两条**已知的不一致**（都是用压缩工具时要知道的）：
 
 - **JPEG 源图两条路径不逐字节相同**：`stb_image` 与 Pillow/libjpeg 解 JPEG 的取证
-  （IDCT 舍入）不同，同一张 `bootlogo.jpg` 一个出 49485 B、一个出 49494 B。要比字节
-  就用无损源（PNG）或 `--raw` 喂同一份 RGB565；差异 ≤1 LSB，屏上看不出来。
+  （IDCT 舍入）不同，同一张图一个出 49485 B、一个出 49494 B（数字出自换 PNG 之前那张
+  `bootlogo.jpg`）。要比字节就用无损源（PNG）或 `--raw` 喂同一份 RGB565；差异 ≤1 LSB，
+  屏上看不出来。开机图现在是 PNG，正是为了避开这条。
 - **LZ4 码流不跨版本逐字节一致**：工具 vendor 的 liblz4 是 1.10.0，板子上 python-lz4
   4.4.5 带的是 1.9.x，同一条 band **8 条里有 3 条**压缩结果不同（都合法）。设备只解压，
   `LZ4_decompress_safe` 与版本无关；两条来源的码流**都在板上验证过像素精确**
@@ -324,7 +327,8 @@ numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0
 | `python3 scripts/pud_usb.py` | 自检通过；QOI/RLE 与 C 库参考向量一致，band limit 报 **21835**；没有 numpy 时自动走纯 Python 打包路径 |
 | `python3 scripts/check_pudcodec.py` | 28 项断言 **27 通过**，唯一 FAIL 是上面那条已知的 LZ4 版本差异 |
 | `pud_usb.open_device()`（读 caps） | `proto 2 / frame_max 65536 / decoder 3 / band_pixels 21835`；面板 `480x320 rotation 1 16bpp 50000kHz touch poll 10ms 70x40mm touch True` —— 与固件/驱动文档**逐字段一致** |
-| `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg` | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
+| `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg`（当时那张） | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
+| 同上，换成现在的开机图 `assets/bootlogo.png` | `sent 8 bands, 13074 B in 26.8 ms` —— **载荷与时间仍只有原来的一半** |
 | `ep1_out_speed_test.py` | 8~320 行的每个尺寸都是 **~0.816 MB/s** 一条平线 |
 | `fps_bench.py --full --frames 20` | photo **6.19 fps**、noise **1.83 fps**，判定都是 `USB 受限` |
 | `video_player.py --xres 480 --yres 320 --fps 15 --no-loop test.mp4` | `75 frames in 5.1 s -> 14.6 fps, 0.37 MB/s`（目标 15 fps，基本实时；片源是 `ffmpeg -f lavfi -i testsrc=size=480x320:rate=15 -t 5 …` 造的） |

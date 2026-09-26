@@ -102,7 +102,7 @@ Pico has provided a bootloader that can easily flash the firmware to the Pico bo
 
 Once the firmware flashing is complete, you will see some content displayed on the screen. Here is an example：
 
-![boot](./assets/bootlogo.jpg)
+![boot](./assets/bootlogo.png)
 
 ### Display Pictures and videos
 

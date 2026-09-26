@@ -102,7 +102,7 @@ Pico 提供了一个引导加载程序，可以轻松地将固件烧录到 Pico 
 
 固件烧录完成后，您将看到屏幕上显示一些内容。这是一个示例：
 
-![boot](./assets/bootlogo.jpg)
+![boot](./assets/bootlogo.png)
 
 ### 显示图片和视频
 
