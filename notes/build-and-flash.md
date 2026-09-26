@@ -62,9 +62,10 @@ cmake --build . -j8
 
 `PICO_PLATFORM=rp2350-arm-s` 表示用 **Cortex-M33（安全态）**，而不是 Hazard3 RISC-V。
 
-CMake 还提供了 `flash` 目标（`CMakeLists.txt` 第 137 行起，按板子选 `target/rp2040.cfg`
-或 `target/rp2350.cfg`），但它要求 **openocd 与构建在同一台机器上**。
-本项目 OpenOCD 跑在 Windows 宿主机，因此改用下面的 gdb 方式。
+CMake 还提供了 `flash` 目标（`CMakeLists.txt` 里按板子选 `target/rp2040.cfg` 或
+`target/rp2350.cfg`），它要求 **openocd 与构建在同一台机器上** —— 在原生 Linux 开发机上
+（openocd 就在本机）可以直接 `cmake --build build-pico2 --target flash`；
+只有 OpenOCD 跑在 Windows 宿主机那套接法下，才要改用下面的 gdb 方式。
 
 ## 编辑器 / clangd
 
@@ -118,6 +119,11 @@ gdb-multiarch -q -nh \
 
 > `-q -nh` 是必要的：不加会去读 `~/.gdbinit`，某些环境下（如装了 gef）会报错中断脚本。
 > 项目里的 `.gdbinit` 只有一行 `target extended-remote :3333`。
+
+**原生 Linux 上实测（2026-09-26）**：上面这条原样可用 —— 各段 `.text/.rodata/.data/
+.noncacheable` 全部写入，`load size 154376`（= 本次构建的 `text 55936 + data 98440`）、
+`Transfer rate 63 KB/sec`；烧完主机看到干净的重新枚举（设备号 070 → 071），
+`PUD_CMD_GET_CAPS` 读回的 caps 与烧录前**逐字段一致**。
 
 成功输出形如：
 
