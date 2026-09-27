@@ -107,7 +107,9 @@ static uint8_t s_tjpgd_workspace[TJPGD_WORKSPACE_SIZE]
  * The buffer is always indexed with the visible width as the row pitch, so a
  * flush is a contiguous run even for a narrower image. */
 #define TJPGD_GROUP_ROWS 8
-static u16 s_tjpgd_rowbuf[TFT_HOR_RES * TJPGD_GROUP_ROWS];
+/* Sized by the larger of the two, because a 90 degree rotation asked for at
+ * runtime swaps width and height: max() of the build pair is the same either way. */
+static u16 s_tjpgd_rowbuf[MAX(TFT_HOR_RES, TFT_VER_RES) * TJPGD_GROUP_ROWS];
 
 struct tjpgd_ctx {
 	const u8 *data;
@@ -145,10 +147,10 @@ static void tjpgd_flush_group(void)
 	s_tjpgd.group_valid = false;
 	s_tjpgd.group_rows = 0;
 
-	if (rows == 0 || y >= TFT_VER_RES || s_tjpgd.width == 0)
+	if (rows == 0 || y >= g_pud_data.disp.yres || s_tjpgd.width == 0)
 		return;
-	if (y + rows > TFT_VER_RES)
-		rows = TFT_VER_RES - y;
+	if (y + rows > g_pud_data.disp.yres)
+		rows = g_pud_data.disp.yres - y;
 
 	tft_video_flush(s_tjpgd.x, y, s_tjpgd.x + s_tjpgd.width - 1,
 	                y + rows - 1, s_tjpgd_rowbuf, s_tjpgd.width * rows * 2);
@@ -228,10 +230,10 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 
 	/* Only the part that lands on the panel is worth buffering. */
 	s_tjpgd.width = jdec.width;
-	if (s_tjpgd.x + s_tjpgd.width > TFT_HOR_RES)
-		s_tjpgd.width = TFT_HOR_RES - s_tjpgd.x;
-	if (s_tjpgd.width > TFT_HOR_RES)
-		s_tjpgd.width = TFT_HOR_RES;
+	if (s_tjpgd.x + s_tjpgd.width > g_pud_data.disp.xres)
+		s_tjpgd.width = g_pud_data.disp.xres - s_tjpgd.x;
+	if (s_tjpgd.width > g_pud_data.disp.xres)
+		s_tjpgd.width = g_pud_data.disp.xres;
 
 	res = jd_decomp(&jdec, tjpgd_output, 0);
 	tjpgd_flush_group();
@@ -684,6 +686,14 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
  */
 static void decoder_draw_bootlogo(void)
 {
+	/* The logo is baked for the orientation this firmware was built in: it is
+	 * one image, bands and all, with no second copy for the other way round.
+	 * A host that rotated the panel at runtime (PUD_CMD_SET_PARAM) gets no
+	 * logo rather than a rotated one -- the first frame it sends is what it
+	 * asked for anyway. */
+	if (g_pud_data.disp.rotation != TFT_ROTATION)
+		return;
+
 #if DECODER_TYPE == DECODER_USE_LZ4
 	const u8 *p = (const u8 *)bootlogo;
 	u32 count = (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
@@ -724,6 +734,12 @@ static void decoder_task(void *param)
 
 	(void)param;
 
+	/* Whatever the host set over USB that has to reach the panel (a rotation:
+	 * the MADCTL write is not something to do in the USB interrupt) is applied
+	 * here, before anything is drawn -- otherwise the logo and the first frame
+	 * would be drawn in the orientation the panel still had. */
+	pud_params_flush_display();
+
 	/* First paint: the boot logo, before any host frame.  The panel has
 	 * exactly one writer (this task), so no lock is needed, and doing it
 	 * here instead of in a task of its own both drops a task and makes
@@ -756,8 +772,15 @@ static void decoder_task(void *param)
 			if (xSemaphoreTake(s_decoder_sem,
 			                   pdMS_TO_TICKS(EP1_POLL_PERIOD_MS)) != pdTRUE)
 				usbd_vendor_ep1_poll();
+			/* a rotation asked for while idle still has to land */
+			pud_params_flush_display();
 			continue;
 		}
+
+		/* Before this frame, not after: a rotation the host asked for
+		 * arrives together with the mode change that follows it, and the
+		 * frame it sends next is already in the new orientation. */
+		pud_params_flush_display();
 
 		decoder_drawimg(s_frames[slot].xs, s_frames[slot].ys,
 		                s_frames[slot].xe, s_frames[slot].ye,

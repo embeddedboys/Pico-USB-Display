@@ -294,16 +294,45 @@ struct pud_param_state {
 | 字段 | 状态 | 原因 |
 | --- | --- | --- |
 | `brightness` | ✅ 已实现 | `backlight_set_level()` 是一次 PWM 电平写，百分比；**读回的是主机设的值**，不是 PWM 生效值（见下） |
-| `rotation` | ❌ 上报为 rejected | 旋转在 pico-display-lib 里是**编译期**选择（`drivers/display/CMakeLists.txt` 按 0/2 与 1/3 分两套几何尺寸），而且主机侧的 DRM mode 也由它推出来 —— 改它是"重刷固件 + 一次 modeset"，不是一个参数 |
+| `rotation` | ✅ 已实现 | 运行期改朝向 0..3，两段式落地（见下） |
 | ~~`fps`~~ | **已删除** | 曾经有过一个帧率字段，后来去掉：设备侧**不控节奏**，EP1 流控让主机的 bulk 写直接等待（AGENTS.md 不变量 2），比丢帧更严格，再叠一个帧率上限只会更糟。位 `0x04` 与结构体里那个字节**保留不复用**（`reserved`），避免"已经知道这个号"的实现被静默改语义 |
 | `decoder` | ❌ 上报为 rejected | `DECODER_TYPE` 决定哪些解码器被编进来（`CMakeLists.txt` + `#if`），运行期切不了 |
 
-**`brightness` 的读回语义（实机踩过）**：pico-display-lib 的背光会在主机给的百分数上再加
-面板 profile 的 offset（`drivers/backlight/pwm_backlight.c` 的 `bl_lvl_offs`，本构型 **5**；
+**`brightness` 的读回语义（实机踩过）**：pico-display-lib 的背光会在主机给的百分数上再加面板 profile 的 offset（`drivers/backlight/pwm_backlight.c` 的 `bl_lvl_offs`，本构型 **5**；
 它的用意是"设 0% 也不至于完全看不见"），而 `backlight_get_level()` 返回的是**这个和**
 （生效值）。第一版直接把生效值读回，实机上就是"设 10 读回 15"。现在固件缓存主机设的值并
 读回它：主机拿到的是自己设的数，**面板实际会比这个数字亮 offset**；主机从没设过之前，
 读回的是启动时的生效值。
+
+**`rotation` 怎么落地的（两段式）**：`tft_set_rotation()`（pico-display-lib）就是**一次
+MADCTL 写**加几何记账 —— `tft_set_addr_win()` 把逻辑窗口原样交给面板，物理映射全由 MADCTL
+负责，所以不需要任何坐标变换代码，缓冲区也不必重算（一次 90° 只交换宽高，**像素总数不变**，
+这也是它比 decoder 便宜的原因）。固件把它拆成两半：
+
+本构型的具体数字（面板 ILI9488，**原生 320×480**；板级 config `pico_dm_qd3503728.cmake` 里
+`TFT_HOR_RES 320 / TFT_VER_RES 480 / TFT_ROTATION 1`，显示驱动 CMakeLists 再按 1/3 交换成
+逻辑 480×320）：
+
+| 主机设 rotation | 角度 | 逻辑几何（caps 上报） |
+| --- | --- | --- |
+| 0 | 0°（原生） | 320×480 |
+| 1 | 90°（编译期默认） | 480×320 |
+| 2 | 180° | 320×480 |
+| 3 | 270° | 480×320 |
+
+规则就是"奇偶与编译期朝向不同就交换宽高"（`tft_set_rotation()` 里那一行判断），方向沿用 lib
+里 `set_dir()` 既有的 MADCTL 表，所以主机设 1 得到的就是 config 里那个朝向本身。
+
+1. **USB 中断里只做记账**：更新 `g_pud_data.disp.rotation` 与 `xres/yres`（**caps 立刻按新
+   几何上报** —— 主机正是靠回读 caps 来定 DRM mode，慢一拍就会建错 mode），并调
+   `indev_set_dir(indev_dir_for_rotation())` 让触摸跟着走（纯记账，中断里安全）；
+2. **MADCTL 写留给 `decoder_task`**（`pud_params_flush_display()`）：面板寄存器写要走总线，
+   不能在 USB 中断里做。任务在**画每一帧之前**、以及空闲循环里都会调用它，所以"下一帧"
+   必然落在新朝向下；面板只有一个写者（这个任务），两者不会在面板面前打架。
+
+**bootlogo 在"运行期朝向 ≠ 编译期朝向"时直接跳过**（`decoder_draw_bootlogo()` 开头
+return）：logo 是为编译朝向烘焙的一整张图，没有第二份，不画比画歪强 —— 主机随后发的第一帧
+就是它要的画面。
 
 **"不支持"要如实上报、不能装作成功**：主机的写不会失败，`rejected` 位会告诉它哪几个
 字段没生效。这也让协议可以慢慢长——加一个字段不需要改已有字段的语义。

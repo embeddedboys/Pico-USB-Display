@@ -298,7 +298,7 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
  * copy of something that changed behind its back.  What is not implemented is
  * named instead of pretended: see PUD_PARAMS_SETTABLE below.
  */
-#define PUD_PARAMS_SETTABLE (PUD_PARAM_BRIGHTNESS)
+#define PUD_PARAMS_SETTABLE (PUD_PARAM_BRIGHTNESS | PUD_PARAM_ROTATION)
 
 /* Bits of the last PUD_CMD_SET_PARAM that could not be applied.  Reported to
  * the host by the next query, which is how a userspace test sees a rejected
@@ -314,6 +314,17 @@ static u32 s_params_rejected;
 static u8 s_brightness;
 static bool s_brightness_set;
 
+/* Rotating the panel is one MADCTL write (see tft_set_rotation()) plus the
+ * geometry and touch transform that go with it.  The bookkeeping happens right
+ * here, because the host reads the capability report back to size its mode and
+ * has to see the new geometry immediately; the register write waits for the
+ * display task, because that goes out over the panel bus and this runs in the
+ * USB interrupt.  The next frame cannot be drawn before the task has run (it
+ * calls pud_params_flush_display() first), so the two never disagree in front of
+ * the panel. */
+static u8 s_panel_rotation = TFT_ROTATION; /* what the panel is programmed for */
+static volatile u8 s_want_rotation = TFT_ROTATION;
+
 void pud_params_read(struct pud_param_state *st)
 {
 	st->settable = PUD_PARAMS_SETTABLE;
@@ -326,7 +337,7 @@ void pud_params_read(struct pud_param_state *st)
 
 void pud_params_apply(const struct pud_params *p)
 {
-	u32 rejected;
+	u32 applied = 0;
 
 	if (p->mask & PUD_PARAM_BRIGHTNESS) {
 		/* the documented range is a percentage; whatever the panel profile
@@ -336,21 +347,64 @@ void pud_params_apply(const struct pud_params *p)
 		backlight_set_level(level);
 		s_brightness = level;
 		s_brightness_set = true;
+		applied |= PUD_PARAM_BRIGHTNESS;
 	}
 
-	/* rotation: the panel geometry is a compile-time choice in
-	 * pico-display-lib (drivers/display/CMakeLists.txt) and the host's DRM
-	 * mode is built from it, so this is a reflash, not a parameter.
-	 * decoder: DECODER_TYPE selects which decoders are compiled in.
-	 * (a frame-rate field lived here for one revision; it was dropped -- the
-	 * device does not pace frames at all, EP1 flow control makes the host
-	 * wait, which is stricter and cannot drop a frame.) */
-	rejected = p->mask & ~(u32)PUD_PARAMS_SETTABLE;
-	s_params_rejected = rejected;
+	if ((p->mask & PUD_PARAM_ROTATION) && p->rotation <= TFT_ROTATE_270) {
+		u8 rot = p->rotation;
 
-	if (rejected)
+		g_pud_data.disp.rotation = rot;
+		/* The frame the panel is driven in follows the rotation, and the
+		 * host builds its mode from what it reads back here.  Derived from
+		 * the build-time values, same rule as tft_set_rotation(). */
+		if ((rot ^ TFT_ROTATION) & 1) {
+			g_pud_data.disp.xres = TFT_VER_RES;
+			g_pud_data.disp.yres = TFT_HOR_RES;
+		} else {
+			g_pud_data.disp.xres = TFT_HOR_RES;
+			g_pud_data.disp.yres = TFT_VER_RES;
+		}
+
+		/* touch follows the display; this is pure bookkeeping too */
+		if (!INDEV_DRV_NOT_USED)
+			indev_set_dir(indev_dir_for_rotation(rot));
+
+		s_want_rotation = rot;
+		applied |= PUD_PARAM_ROTATION;
+	}
+
+	/* What is left is a build-time choice: DECODER_TYPE selects which decoders
+	 * are compiled in.  (A frame-rate field lived here for one revision and was
+	 * dropped -- the device does not pace frames at all, EP1 flow control makes
+	 * the host wait, which is stricter and cannot drop a frame.) */
+	s_params_rejected = p->mask & ~applied;
+
+	if (s_params_rejected)
 		printf("%s, rejected 0x%lx of mask 0x%lx\n", __func__,
-		       (unsigned long)rejected, (unsigned long)p->mask);
+		       (unsigned long)s_params_rejected, (unsigned long)p->mask);
+}
+
+/*
+ * Put a rotation the host asked for on the panel.  Called by the display task
+ * (the only writer of the panel) before it draws anything, returns true when it
+ * changed something.
+ */
+bool pud_params_flush_display(void)
+{
+	u8 rot = s_want_rotation;
+
+	if (rot == s_panel_rotation)
+		return false;
+
+	if (tft_set_rotation(rot) != 0) {
+		printf("%s, could not rotate the panel to %u\n", __func__, rot);
+		return false;
+	}
+
+	s_panel_rotation = rot;
+	printf("panel rotation %u\n", rot);
+
+	return true;
 }
 
 /* Fills ep2_write_buffer for one query and returns how many bytes to send.

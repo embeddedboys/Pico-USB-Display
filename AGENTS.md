@@ -117,6 +117,11 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
     EP4 的上报布局（8 字节，`include/pud.h` 的 `struct pud_touch_report`）是**协议字段**，
     改它要同步驱动仓的 `notes/usb-protocol.md`。
 
+11. **面板寄存器写也不能在 USB 中断里做。** 走总线（SPI/PIO）要等硬件，放在厂商请求回调里
+    会长时间占着 USB 中断 —— 运行期参数通道因此把 `rotation` 拆成两半：中断里只记账
+    （几何 + `indev_set_dir()`，都是几次赋值），MADCTL 写由 `decoder_task` 在画下一帧之前
+    执行（`pud_params_flush_display()`，见 notes/usb-protocol.md）。
+
 ## 当前配置（改前先读 notes）
 
 | 配置 | 值 | 说明 |

@@ -149,16 +149,17 @@ void pud_touch_poll(void)
 		/*
 		 * indev_read_*() already returns panel coordinates in the display
 		 * frame: the library applies the transform for the display's
-		 * rotation (TFT_ROTATION, the same number the panel is driven
-		 * with).  Clamp anyway -- the report is a wire contract, and a
-		 * finger resting on the bezel can read past the active area.
+		 * rotation (the same number the panel is driven with, and
+		 * indev_set_dir() follows a rotation asked for over USB).  Clamp
+		 * anyway -- the report is a wire contract, and a finger resting
+		 * on the bezel can read past the active area.
 		 */
 		x = indev_read_x();
 		y = indev_read_y();
-		if (x >= TFT_HOR_RES)
-			x = TFT_HOR_RES - 1;
-		if (y >= TFT_VER_RES)
-			y = TFT_VER_RES - 1;
+		if (x >= g_pud_data.disp.xres)
+			x = g_pud_data.disp.xres - 1;
+		if (y >= g_pud_data.disp.yres)
+			y = g_pud_data.disp.yres - 1;
 	}
 
 	if (!pressed && !was_pressed)

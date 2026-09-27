@@ -23,13 +23,19 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
  * usbd_vendor.c both do.
  *
  * apply() runs in the vendor request handler, i.e. in the USB interrupt, so it
- * has to stay a register-level operation; read() fills an answer from whatever
- * owns each value. */
+ * has to stay a register-level operation (and it only does bookkeeping for the
+ * panel rotation); read() fills an answer from whatever owns each value. */
 struct pud_params;
 struct pud_param_state;
 
 void pud_params_apply(const struct pud_params *p);
 void pud_params_read(struct pud_param_state *st);
+
+/* Put a rotation the host asked for on the panel.  Called by the display task --
+ * MADCTL goes out over the panel bus, which is not something to do in the USB
+ * interrupt that accepted the parameter.  Returns true when it changed
+ * something. */
+bool pud_params_flush_display(void);
 
 /* EP1 flow control.
  *
