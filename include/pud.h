@@ -47,6 +47,8 @@ typedef signed int s32;
 
 #define PUD_CMD_GET_SN 0x01
 #define PUD_CMD_GET_CAPS 0x02
+#define PUD_CMD_SET_PARAM 0x03 /* control OUT (REQ_SET_PARAM), struct pud_params */
+#define PUD_CMD_GET_PARAM 0x04 /* EP2 IN, struct pud_param_state */
 
 /* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The
  * host needs frame_max to size the bands it splits a rectangle into: the same
@@ -85,6 +87,46 @@ struct pud_caps {
  * the host must not register an input device for those.
  */
 #define PUD_CAPS_TOUCH 0x0001 /* an indev driver is compiled in and polled */
+
+/*
+ * Runtime parameters (protocol v2, appended without a version bump: an old host
+ * never sends these commands, and an old device answers GET_PARAM with a short
+ * read, which a host has to read as "unsupported" -- the same rule the query
+ * path already uses for unknown commands).
+ *
+ * The host writes a mask plus the values it wants; the device answers a query
+ * with the values in effect, the set it can change at runtime, and what the last
+ * write could not apply.  Reporting the mask instead of stalling keeps the two
+ * sides compatible while the parameter set grows: a build that cannot do
+ * `rotation` yet says so, and the host can decide what to do about it.
+ *
+ * Keep this in sync with the driver's pud.h and with scripts/pud_usb.py.
+ */
+#define PUD_PARAM_BRIGHTNESS 0x00000001 /* u8, 0..100 percent */
+#define PUD_PARAM_ROTATION 0x00000002 /* 0..3, TFT_ROTATION numbering */
+/* 0x00000004 is retired: it was `fps`, and the device does not pace frames at
+ * all -- EP1 flow control makes the host wait, which cannot drop a frame.  The
+ * bit stays unused instead of being renumbered, the same rule the request
+ * numbers follow: an implementation that already knows it must not silently
+ * start meaning something else. */
+#define PUD_PARAM_DECODER 0x00000008 /* 0..4, DECODER_TYPE numbering */
+
+struct pud_params {
+	u32 mask; /* PUD_PARAM_*: which of the values below this write sets */
+	u8 brightness; /* 0..100 percent (the backlight takes a percentage) */
+	u8 rotation; /* TFT_ROTATION numbering */
+	u8 reserved; /* retired `fps`: keeps the struct at 8 bytes, no padding */
+	u8 decoder; /* DECODER_TYPE numbering */
+};
+
+struct pud_param_state {
+	u32 settable; /* PUD_PARAM_* this build can change at runtime */
+	u32 rejected; /* PUD_PARAM_* the last PUD_CMD_SET_PARAM could not apply */
+	u8 brightness; /* values in effect now, read from the hardware/driver */
+	u8 rotation;
+	u8 reserved;
+	u8 decoder;
+};
 
 /*
  * EP1 OUT framing (protocol v2).

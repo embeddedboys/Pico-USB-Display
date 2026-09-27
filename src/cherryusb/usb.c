@@ -5,6 +5,7 @@
 #include "pud.h"
 #include "usb.h"
 #include "decoder.h"
+#include "backlight.h"
 
 /* Set by the USB event handler: usbd_vendor_ep1_tick() must not arm anything
  * before the host has configured the interface (see the gate there). */
@@ -290,6 +291,68 @@ void usbd_vendor_ep1_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 	ep1_finish(true);
 }
 
+/* Runtime parameters (PUD_CMD_SET_PARAM / PUD_CMD_GET_PARAM).
+ *
+ * The values are read back from whoever owns them (backlight, display config,
+ * the build) instead of being cached here, so a query can never report a stale
+ * copy of something that changed behind its back.  What is not implemented is
+ * named instead of pretended: see PUD_PARAMS_SETTABLE below.
+ */
+#define PUD_PARAMS_SETTABLE (PUD_PARAM_BRIGHTNESS)
+
+/* Bits of the last PUD_CMD_SET_PARAM that could not be applied.  Reported to
+ * the host by the next query, which is how a userspace test sees a rejected
+ * field without the write itself failing. */
+static u32 s_params_rejected;
+
+/* The brightness the host asked for.  Kept because the backlight reports its
+ * *effective* level instead: the panel profile adds an offset (bl_lvl_offs, 5 on
+ * this build, so that 0% is not an invisible panel), and a parameter channel has
+ * to hand a host back what it set rather than that sum -- measured: asking for
+ * 10 read back 15 before this was cached.  Until a host sets one, the level read
+ * back is the effective level this build booted with. */
+static u8 s_brightness;
+static bool s_brightness_set;
+
+void pud_params_read(struct pud_param_state *st)
+{
+	st->settable = PUD_PARAMS_SETTABLE;
+	st->rejected = s_params_rejected;
+	st->brightness = s_brightness_set ? s_brightness : backlight_get_level();
+	st->rotation = g_pud_data.disp.rotation;
+	st->reserved = 0;
+	st->decoder = DECODER_TYPE;
+}
+
+void pud_params_apply(const struct pud_params *p)
+{
+	u32 rejected;
+
+	if (p->mask & PUD_PARAM_BRIGHTNESS) {
+		/* the documented range is a percentage; whatever the panel profile
+		 * adds on top of it stays the profile's business */
+		u8 level = p->brightness > 100 ? 100 : p->brightness;
+
+		backlight_set_level(level);
+		s_brightness = level;
+		s_brightness_set = true;
+	}
+
+	/* rotation: the panel geometry is a compile-time choice in
+	 * pico-display-lib (drivers/display/CMakeLists.txt) and the host's DRM
+	 * mode is built from it, so this is a reflash, not a parameter.
+	 * decoder: DECODER_TYPE selects which decoders are compiled in.
+	 * (a frame-rate field lived here for one revision; it was dropped -- the
+	 * device does not pace frames at all, EP1 flow control makes the host
+	 * wait, which is stricter and cannot drop a frame.) */
+	rejected = p->mask & ~(u32)PUD_PARAMS_SETTABLE;
+	s_params_rejected = rejected;
+
+	if (rejected)
+		printf("%s, rejected 0x%lx of mask 0x%lx\n", __func__,
+		       (unsigned long)rejected, (unsigned long)p->mask);
+}
+
 /* Fills ep2_write_buffer for one query and returns how many bytes to send.
  * The caller writes exactly that many, so a command that produces less than
  * the host asked for cannot leak stale buffer contents past its payload. */
@@ -325,6 +388,15 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 		if (len > sizeof(caps))
 			len = sizeof(caps);
 		memcpy(ep2_write_buffer, &caps, len);
+		break;
+	}
+	case PUD_CMD_GET_PARAM: {
+		struct pud_param_state st;
+
+		pud_params_read(&st);
+		if (len > sizeof(st))
+			len = sizeof(st);
+		memcpy(ep2_write_buffer, &st, len);
 		break;
 	}
 	default:

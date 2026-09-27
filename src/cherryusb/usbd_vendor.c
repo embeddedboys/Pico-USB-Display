@@ -1,6 +1,8 @@
 #include "usbd_core.h"
 #include "usbd_vendor.h"
 #include "usb.h"
+/* struct pud_params / pud_param_state (the request struct embeds one by value) */
+#include "pud.h"
 
 #include "decoder.h"
 
@@ -44,6 +46,22 @@ struct req_ep2_in {
 	u16 size;
 };
 
+/* Runtime parameters: the request header the query path uses, followed by the
+ * values being set.  4 + sizeof(struct pud_params) bytes, well inside one
+ * full-speed control transfer. */
+struct req_set_param {
+	u16 cmd;
+	u16 size;
+	struct pud_params params;
+};
+
+/* The wire layout is shared with the host (struct pud_params in the driver's
+ * pud.h, PARAMS_STRUCT / PARAM_STATE_STRUCT in scripts/pud_usb.py), so the
+ * padding has to be what everyone assumes: no padding at all. */
+_Static_assert(sizeof(struct pud_params) == 8, "pud_params wire size");
+_Static_assert(sizeof(struct pud_param_state) == 12, "pud_param_state wire size");
+_Static_assert(sizeof(struct req_set_param) == 12, "set_param wire size");
+
 static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
                                   uint8_t **data, uint32_t *len)
 {
@@ -62,6 +80,28 @@ static int vendor_request_handler(uint8_t busid, struct usb_setup_packet *setup,
 		        busid, EP2_IN_ADDR, ep2_write_buffer,
 		        usbd_vendor_ep2_bulk_in_fsm(req_ep2_in->cmd,
 		                                    req_ep2_in->size));
+	case REQ_SET_PARAM: {
+		struct req_set_param *req;
+
+		/* A short write means the host's framing was wrong, and so does
+		 * a size field that does not cover the values -- stall rather
+		 * than apply half of what it sent. */
+		if (*len < sizeof(*req))
+			return -1;
+
+		req = (struct req_set_param *)*data;
+		if (req->cmd != PUD_CMD_SET_PARAM ||
+		    req->size < sizeof(req->params))
+			return -1;
+
+		/* Runs in the USB interrupt: the only parameter that is applied
+		 * here (brightness) is a PWM level write, which is a few
+		 * arithmetic ops and one register store.  Anything heavier has
+		 * to be handed to a task, not done in this context -- see the
+		 * decode-path note in the repository's AGENTS.md. */
+		pud_params_apply(&req->params);
+		return 0;
+	}
 	case REQ_EP4_IN:
 		/* The device pushes touch reports by itself; this request is for
 		 * a host that polls instead, and hands it the current report. */

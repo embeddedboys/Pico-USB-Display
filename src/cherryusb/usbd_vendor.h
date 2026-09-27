@@ -25,6 +25,13 @@ extern "C" {
 #define REQ_EP2_IN 0X03
 #define REQ_EP3_OUT 0X04
 #define REQ_EP4_IN 0X05
+/* Runtime parameters: a control OUT carrying struct req_set_param (see
+ * usbd_vendor.c).  Parameters ride the control endpoint rather than a bulk
+ * endpoint of their own -- they are a handful of bytes, set rarely, and EP0 is
+ * the one channel that needs no descriptor change and no bandwidth next to the
+ * EP1 image stream.  EP3 is still unused and stays reserved for a future bulk
+ * parameter/config channel (see notes/usb-protocol.md). */
+#define REQ_SET_PARAM 0X06
 
 /* Largest single EP1 transfer the firmware accepts, in bytes.  The same number
  * sizes ep1_read_buffer (below) and the decoder frame slot (decoder.c); it is

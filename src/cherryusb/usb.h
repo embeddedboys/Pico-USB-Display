@@ -15,6 +15,22 @@ bool usb_is_configured(void);
  * must send on EP2 (never more than the host asked for). */
 uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len);
 
+/* Runtime parameters (PUD_CMD_SET_PARAM / PUD_CMD_GET_PARAM).
+ *
+ * Forward declared on purpose: include/pud.h includes this header, so the
+ * protocol types cannot be pulled in here without a cycle.  Whoever needs the
+ * definitions (they are passed by pointer here) includes "pud.h" -- usb.c and
+ * usbd_vendor.c both do.
+ *
+ * apply() runs in the vendor request handler, i.e. in the USB interrupt, so it
+ * has to stay a register-level operation; read() fills an answer from whatever
+ * owns each value. */
+struct pud_params;
+struct pud_param_state;
+
+void pud_params_apply(const struct pud_params *p);
+void pud_params_read(struct pud_param_state *st);
+
 /* EP1 flow control.
  *
  * EP1 is armed only while the decoder has a free frame slot, and an un-armed

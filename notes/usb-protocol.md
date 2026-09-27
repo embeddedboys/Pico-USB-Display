@@ -23,9 +23,10 @@
 
 ```c
 switch (setup->bRequest) {
-case REQ_EP2_IN:   /* 查询：命令 + 长度 */
-case REQ_EP4_IN:   /* 触摸 */
-default:           return -1;   /* 含已废弃的 REQ_EP1_OUT，见下 */
+case REQ_EP2_IN:    /* 查询：命令 + 长度 */
+case REQ_SET_PARAM: /* 运行期参数：命令 + 长度 + 参数本体（见"运行期参数"） */
+case REQ_EP4_IN:    /* 触摸 */
+default:            return -1;   /* 含已废弃的 REQ_EP1_OUT，见下 */
 }
 ```
 
@@ -186,6 +187,7 @@ case REQ_EP2_IN:
 | --- | --- | --- |
 | `0x01` | `PUD_CMD_GET_SN` | `pud_get_ro_sn(ep2_write_buffer, len)` 填 8 字节唯一 ID，返回 `len`（行为不变） |
 | `0x02` | `PUD_CMD_GET_CAPS` | 填 `struct pud_caps`（**32 B**：16 字节头 + 面板参数），返回 `min(len, sizeof(caps))` |
+| `0x04` | `PUD_CMD_GET_PARAM` | 填 `struct pud_param_state`（**12 B**：`settable`/`rejected` + 四个当前值），返回 `min(len, sizeof(st))` —— 见"运行期参数" |
 | 其他 | — | 返回 **0**（发零长度包），主机侧读回短包 → 判定"不支持" |
 
 ### `PUD_CMD_GET_CAPS`（设备能力 + 面板参数）
@@ -229,6 +231,102 @@ struct pud_caps {
 处理（驱动日志里会写 `old firmware: no panel parameters`）。
 RP2350 上 `frame_max=65536` 经 `min(65535, …)` 后与改前的编译期常量**完全一致**，
 因此分带行为零变化。
+
+## 运行期参数（`PUD_CMD_SET_PARAM` / `PUD_CMD_GET_PARAM`）
+
+主机**向设备**写参数走的是控制端点，不新增端点：参数只有几个字节、改动很少见，而 EP0
+是唯一一条"不用改配置描述符、也不跟 EP1 图像流抢带宽"的通道。EP3 继续留着做将来可能
+需要的 bulk 参数/配置通道（它仍然**没有**进描述符，见上文）。
+
+### 写入：`REQ_SET_PARAM`（0x06）+ `PUD_CMD_SET_PARAM`（0x03）
+
+控制 OUT，数据阶段 = 查询通道那个 4 字节头 + 参数本体（共 12 字节）：
+
+```c
+struct req_set_param {
+	u16 cmd; /* PUD_CMD_SET_PARAM */
+	u16 size; /* sizeof(struct pud_params) */
+	struct pud_params params;
+};
+
+#define PUD_PARAM_BRIGHTNESS 0x00000001 /* u8, 0..100 百分比 */
+#define PUD_PARAM_ROTATION 0x00000002 /* 0..3，TFT_ROTATION 编号 */
+/* 0x00000004 已退休：它原来是 fps，而设备侧根本不控节奏（EP1 流控让主机等），
+ * 位号**不复用**，理由与请求号一样：已经知道这个号的实现不能被静默改语义。 */
+#define PUD_PARAM_DECODER 0x00000008 /* 0..4，DECODER_TYPE 编号 */
+
+struct pud_params {
+	u32 mask; /* 本次要设置哪几个字段 */
+	u8 brightness;
+	u8 rotation;
+	u8 reserved; /* 退休的 fps：保持结构体 8 字节、不引入隐式 padding */
+	u8 decoder;
+};
+```
+
+- 只有 `mask` 里点到的字段会被采纳；写本身**不返回数据**（不像查询那样回 EP2）。
+- 载荷太短、或 `cmd`/`size` 不对 → 固件**stall** 这个请求（pyusb 侧会抛 `USBError`），
+  而不是应用一半参数。
+- 应用发生在 USB 中断里（厂商请求回调），所以这里只允许寄存器级的操作：目前唯一的
+  `brightness` 就是一次 `pwm_set_gpio_level()`。将来要是有需要重初始化面板的参数，
+  必须交给任务做，不能在这个上下文里做。
+
+### 读回：`PUD_CMD_GET_PARAM`（0x04）
+
+走现有查询通道（`REQ_EP2_IN`），回复 12 字节：
+
+```c
+struct pud_param_state {
+	u32 settable; /* 这个固件能在运行期改的字段 */
+	u32 rejected; /* 上一次 SET_PARAM 里没能应用的字段 */
+	u8 brightness; /* 当前生效值，读取时从各自的所有者那里现取 */
+	u8 rotation;
+	u8 reserved;
+	u8 decoder;
+};
+```
+
+值都是**现读**的（`backlight_get_level()`、`g_pud_data.disp.rotation`、`DECODER_TYPE`），
+不在这里缓存一份，所以查询不会报出与硬件不符的旧值。
+
+### 现在能设什么，为什么
+
+| 字段 | 状态 | 原因 |
+| --- | --- | --- |
+| `brightness` | ✅ 已实现 | `backlight_set_level()` 是一次 PWM 电平写，百分比；**读回的是主机设的值**，不是 PWM 生效值（见下） |
+| `rotation` | ❌ 上报为 rejected | 旋转在 pico-display-lib 里是**编译期**选择（`drivers/display/CMakeLists.txt` 按 0/2 与 1/3 分两套几何尺寸），而且主机侧的 DRM mode 也由它推出来 —— 改它是"重刷固件 + 一次 modeset"，不是一个参数 |
+| ~~`fps`~~ | **已删除** | 曾经有过一个帧率字段，后来去掉：设备侧**不控节奏**，EP1 流控让主机的 bulk 写直接等待（AGENTS.md 不变量 2），比丢帧更严格，再叠一个帧率上限只会更糟。位 `0x04` 与结构体里那个字节**保留不复用**（`reserved`），避免"已经知道这个号"的实现被静默改语义 |
+| `decoder` | ❌ 上报为 rejected | `DECODER_TYPE` 决定哪些解码器被编进来（`CMakeLists.txt` + `#if`），运行期切不了 |
+
+**`brightness` 的读回语义（实机踩过）**：pico-display-lib 的背光会在主机给的百分数上再加
+面板 profile 的 offset（`drivers/backlight/pwm_backlight.c` 的 `bl_lvl_offs`，本构型 **5**；
+它的用意是"设 0% 也不至于完全看不见"），而 `backlight_get_level()` 返回的是**这个和**
+（生效值）。第一版直接把生效值读回，实机上就是"设 10 读回 15"。现在固件缓存主机设的值并
+读回它：主机拿到的是自己设的数，**面板实际会比这个数字亮 offset**；主机从没设过之前，
+读回的是启动时的生效值。
+
+**"不支持"要如实上报、不能装作成功**：主机的写不会失败，`rejected` 位会告诉它哪几个
+字段没生效。这也让协议可以慢慢长——加一个字段不需要改已有字段的语义。
+
+**老固件怎么表现**：没有 `PUD_CMD_GET_PARAM` 的固件对未知 cmd 返回 0 长度，主机读回短包
+就该判"设备不支持运行期参数"（和查询通道既有的规则一致）；`REQ_SET_PARAM` 则会被
+`default:` 分支 stall。两边都不会静默错解。
+
+### 用户态验证（不需要内核驱动）
+
+```bash
+python3 scripts/param_test.py              # 自检：调暗/调亮并读回，再验不支持字段被上报
+python3 scripts/param_test.py --brightness 30   # 只设一个值并读回
+```
+
+`pud_usb.py` 里的 `Display.set_params()` / `Display.get_params()` 是这两个命令的实现，
+`PARAMS_STRUCT` / `PARAM_STATE_STRUCT` 的布局与固件的 `_Static_assert` 是**同一份约定**
+（8 / 12 字节，无 padding）。
+
+> 驱动侧（`PUD-kernel-drivers`）**已实现这两个命令**：`pud_set_params()` /
+> `pud_push_params()` 在 probe 时下发模块参数 `brightness=`/`rotation=`/`decoder=`
+> （`-1` = 不动），并把 `rejected` 打出来；驱动仓的
+> `notes/usb-protocol.md` 有同一份契约的镜像段落。
 
 ## EP4 触摸的处理
 
