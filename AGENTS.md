@@ -29,16 +29,35 @@
 ## 构建与烧录
 
 ```bash
+./build.sh lunch     # 选板子（pico/pico2）+ 面板配置（configs/）+ 烧录方式，记在 .pud-config
+./build.sh           # 配置 + 构建；pico2 -> build-pico2/，pico -> build/
+./build.sh flash     # 按选中的方式烧（picotool/openocd/gdb/blackmagic/none）
+```
+
+等价的手工命令（`build.sh` 内部就是它）：
+
+```bash
 cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 ```
 
+- **面板配置从仓库自己的 `configs/` 来**（`-DPUD_CONFIG=<名字>` 传给 CMake），
+  不再从子模块里 include；改/加面板配置改这里。脚本都在 `scripts/`，入口是
+  `./build.sh`（`configs` / `config` / `flash` / `clean` 也在里面）。
+  `./build.sh flash -n` 只打印命令行；各条命令的实测状态见
+  [notes/build-and-flash.md](notes/build-and-flash.md)。
 - 子模块要 `--recursive`（CherryUSB / lz4 / pico-display-lib / FreeRTOS-Kernel
   及其 ports）。直连 GitHub 失败时，"走代理 + `git -c http.version=HTTP/1.1`"
   是验证过可行的组合（`ghproxy`/`gitee` 镜像不可用）。
 - 烧录：OpenOCD 跑在 **Windows 宿主机**（WSL 看不到调试器，也无法 `mknod`
   出 `/dev/bus/usb`），WSL 侧用
-  `gdb-multiarch -q -nh -ex "target extended-remote localhost:3333"`。
+  `gdb-multiarch -q -nh -ex "target extended-remote localhost:3333"` —— 这就是
+  `FLASH=gdb` 那一路，`./build.sh flash` 照它跑；`picotool` / `openocd` /
+  `blackmagic` 见 [notes/build-and-flash.md](notes/build-and-flash.md) 的表。
   `-q -nh` 是必需的（否则会读 `~/.gdbinit`，装了 gef 之类会直接报错中断）。
+- **本机直连也行**（2026-09-27 实测）：Raspberry Pi Debug Probe（CMSIS-DAP，
+  `2e8a:000c`）+ 本机 openocd 0.12.0 → `./build.sh flash -m openocd` 直接 `Verified OK`；
+  `FLASH=gdb` 配本机 openocd 起的 GDB server 同样能烧（本机没有 `gdb-multiarch`
+  时用 `/usr/bin/gdb` 也行）。
 - **只读检查固件状态时，读完要 `monitor resume`**；别用 `monitor reset run`
   （会清掉计数器和显示状态）。卡死时复位才用它。
 - 细节见 [`notes/build-and-flash.md`](notes/build-and-flash.md) 与

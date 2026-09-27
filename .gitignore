@@ -6,3 +6,6 @@ __pycache__
 .venv
 tools/build
 compile_commands.json
+
+# build.sh lunch's choice (local state, not a project setting)
+.pud-config

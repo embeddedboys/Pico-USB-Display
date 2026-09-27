@@ -53,24 +53,26 @@ git clone https://github.com/embeddedboys/Pico-USB-Display.git
 cd Pico-USB-Display
 ```
 
-#### 4. 选择您需要的配置，打开 `CMakeLists.txt` 并：
+#### 4. 选择您需要的面板配置
 
-==您可以在配置文件中找到引脚定义。==
+配置在仓库的 `configs/` 目录里（一个面板一个 `.cmake`，引脚定义也在里面），
+用根目录的 `lunch` 选：
 
-```cmake
-# **********  选择合适的配置文件  **********
-include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728_8bit.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_yt350s006.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
+```bash
+./build.sh configs      # 先看一眼有哪些配置（面板 / 总线 / 分辨率 / 触摸）
+./build.sh lunch        # 交互选择：板子（pico / pico2）+ 面板配置
+```
+
+`lunch` 回车即保持当前值，选择记在 `.pud-config`（不提交），之后 `./build.sh` 都按它构建。
+不想改记录时可以临时指定：
+
+```bash
+./build.sh -b pico2 -c generic-st7789v
 ```
 
 #### 5. 然后构建固件
 ```bash
-mkdir -p build && cd build
-cmake .. -G Ninja
-ninja
+./build.sh              # 配置 + 构建；板子选 pico2 时构建目录是 build-pico2/
 ```
 ```text
 [82/84] Linking CXX executable pico-usb-display.elf
@@ -84,7 +86,7 @@ Memory region         Used Size  Region Size  %age Used
      98328     158372      32792     289492 pico-usb-display.elf
 ```
 
-您可以在 `build` 目录中找到固件。
+您可以在 `build-pico2`（或 `build`）目录中找到固件。
 
 #### 6. 将 udev 规则复制到 `/etc/udev/rules.d/`
 
@@ -98,7 +100,19 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 #### 7. 将固件烧录到您的 Pico 开发板
 
-Pico 提供了一个引导加载程序，可以轻松地将固件烧录到 Pico 开发板。在插入 Pico 开发板时按住 `BOOTSEL` 按钮，将会挂载一个名为 `RPI-RP2` 或 `RP2350` 的驱动器。然后将 `pico-usb-display.uf2` 文件复制到该驱动器，固件将被烧录到 Pico 开发板。
+`lunch` 里可以顺手选一种烧录方式，然后一条命令烧完（`none` = 自己手动拖 uf2）：
+
+```bash
+./build.sh flash                # 按 lunch 选的方式烧
+./build.sh flash -n             # 只打印命令行，不执行
+./build.sh flash -m openocd     # 这次改用 openocd
+```
+
+方式有 `picotool`（BOOTSEL + USB）、`openocd`（本机 CMSIS-DAP）、`gdb`（连已跑着的
+GDB server，如 Windows 宿主机的 OpenOCD）和 `blackmagic`（黑魔法探针）；
+各条命令的实测情况见 [`notes/build-and-flash.md`](./notes/build-and-flash.md)。
+
+手动烧录：Pico 提供了一个引导加载程序，可以轻松地将固件烧录到 Pico 开发板。在插入 Pico 开发板时按住 `BOOTSEL` 按钮，将会挂载一个名为 `RPI-RP2` 或 `RP2350` 的驱动器。然后将 `pico-usb-display.uf2` 文件复制到该驱动器，固件将被烧录到 Pico 开发板。
 
 固件烧录完成后，您将看到屏幕上显示一些内容。这是一个示例：
 

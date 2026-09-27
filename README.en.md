@@ -53,24 +53,26 @@ git clone https://github.com/embeddedboys/Pico-USB-Display.git
 cd Pico-USB-Display
 ```
 
-#### 3. Select the config you need, open `CMakeLists.txt` and :
+#### 4. Select the panel config you need
 
-==You can find the pin definitions in the configuration file.==
+The configs live in this repository's `configs/` directory (one `.cmake` per panel,
+pin definitions included); pick one with `lunch`:
 
-```cmake
-# **********  select the suitable config file  **********
-include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_qd3503728_8bit.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/pico_dm_yt350s006.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-ili9341.cmake)
-# include(${PICO_DISPLAY_LIB_CONFIG_PATH}/generic-st7789v.cmake)
+```bash
+./build.sh configs      # list them first (panel / bus / resolution / touch)
+./build.sh lunch        # pick the board (pico / pico2) and the panel config
 ```
 
-#### 4. Then build the firmware
+Enter keeps the current value; the choice is remembered in `.pud-config` (not
+committed) and every later `./build.sh` follows it. To override it once:
+
 ```bash
-mkdir -p build && cd build
-cmake .. -G Ninja
-ninja
+./build.sh -b pico2 -c generic-st7789v
+```
+
+#### 5. Then build the firmware
+```bash
+./build.sh              # configure + build; board pico2 builds into build-pico2/
 ```
 ```text
 [82/84] Linking CXX executable pico-usb-display.elf
@@ -84,9 +86,9 @@ Memory region         Used Size  Region Size  %age Used
      98328     158372      32792     289492 pico-usb-display.elf
 ```
 
-You can find the firmware in the `build` directory.
+You can find the firmware in the `build-pico2` (or `build`) directory.
 
-#### 5. Copy the udev rules to `/etc/udev/rules.d/`
+#### 6. Copy the udev rules to `/etc/udev/rules.d/`
 
 If you don't want to access USB devices with root privileges, then you need to configure udev rules correctly.
 ```bash
@@ -96,9 +98,24 @@ sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-#### 6. Flash the firmware to your Pico board
+#### 7. Flash the firmware to your Pico board
 
-Pico has provided a bootloader that can easily flash the firmware to the Pico board. Hold the `BOOTSEL` button while plugging in the Pico board, and a drive named `RPI-RP2` or `RP2350` will be mounted. Then you can copy the `pico-usb-display.uf2` file to the drive and the firmware will be flashed to the Pico board.
+`lunch` also picks the flash method, so one command flashes what was just built
+(`none` = drag the uf2 yourself):
+
+```bash
+./build.sh flash                # flash with the method lunch remembered
+./build.sh flash -n             # print the command line only
+./build.sh flash -m openocd     # use another method once
+```
+
+The methods are `picotool` (BOOTSEL over USB), `openocd` (CMSIS-DAP on this
+machine), `gdb` (an already running GDB server, e.g. OpenOCD on the Windows
+host) and `blackmagic` (Black Magic Probe); see
+[`notes/build-and-flash.md`](./notes/build-and-flash.md) for what has been
+verified on hardware.
+
+Or flash by hand: Pico has provided a bootloader that can easily flash the firmware to the Pico board. Hold the `BOOTSEL` button while plugging in the Pico board, and a drive named `RPI-RP2` or `RP2350` will be mounted. Then you can copy the `pico-usb-display.uf2` file to the drive and the firmware will be flashed to the Pico board.
 
 Once the firmware flashing is complete, you will see some content displayed on the screen. Here is an example：
 
