@@ -145,6 +145,14 @@ set(PUD_DECODER_PINGPONG 1 CACHE STRING "overlap QOI/RLE batch decode with the p
 #   cmake .. -DPUD_CODEC_IN_RAM=0
 set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
 
+# EP1 sink: accept image transfers, count them and throw them away -- no decode,
+# no panel write.  It exists so the USB link can be measured on its own: with it,
+# tests/ep1_out_speed_test.py reports what the link and this interrupt path can
+# carry, and the same run against a normal build shows whether the decoder is in
+# the critical path at all.  The panel keeps whatever was already on it.  Off in
+# every real build:
+#   cmake .. -DPUD_EP1_SINK=1
+set(PUD_EP1_SINK 0 CACHE STRING "EP1: accept and discard image transfers")
 # QOI decode path.  The non-callback API decodes a whole rectangle into one
 # band buffer and is ~40% faster per pixel than the streaming callback API; the
 # band ping-pong then overlaps the panel write with the next decode.  It costs
@@ -199,6 +207,7 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})
+target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_EP1_SINK=${PUD_EP1_SINK})
 target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_BUF_ROWS=${QOI_BUF_ROWS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_NONCALLBACK=${QOI_NONCALLBACK})
 

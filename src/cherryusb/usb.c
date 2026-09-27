@@ -100,6 +100,8 @@ volatile struct {
 	u32 oversize; /* declared more than ep1_read_buffer holds */
 	u32 bad; /* no usable header, or a length mismatch */
 	u32 stale; /* an incomplete transfer was dropped */
+	u32 sink_frames; /* PUD_EP1_SINK: transfers accepted and discarded */
+	u32 sink_bytes; /* PUD_EP1_SINK: their payload bytes */
 } g_ep1_stat;
 
 void usbd_vendor_ep1_reset(void)
@@ -188,6 +190,15 @@ static void ep1_finish(bool submit)
 	s_ep1.total = 0;
 
 	if (submit && size) {
+#if PUD_EP1_SINK
+		/* Measurement build (see PUD_EP1_SINK in CMakeLists.txt): the payload
+		 * has been validated and is now dropped, so what the host measures is
+		 * the link and this interrupt path -- no decoder, no panel write.  The
+		 * flow control below is unchanged, and with no slots being filled the
+		 * host is never asked to wait. */
+		g_ep1_stat.sink_frames++;
+		g_ep1_stat.sink_bytes += size;
+#else
 		/* Do not decode here: this runs on the USB interrupt stack. */
 		decoder_submit_frame(xs, ys, xe, ye,
 		                     ep1_read_buffer + PUD_EP1_HEADER_SIZE,
@@ -197,6 +208,7 @@ static void ep1_finish(bool submit)
 		 * free.  Waiting for the decoder task instead would leave EP1
 		 * un-armed while the host is already writing the next band, and a
 		 * NAK on a full-speed bulk pipe costs a whole frame. */
+#endif
 	}
 
 	usbd_vendor_ep1_tick();
