@@ -24,7 +24,7 @@ and full-screen video is limited by the link rather than by the sender.
 Requires firmware built with DECODER_TYPE=3 (QOI), which is the default.
 
 Usage:
-    ./scripts/xorg_desktop_share.py [options]
+    ./tools/xorg_desktop_share.py [options]
 
 Options:
     --xres W, --yres H   panel size (default 480x320)
@@ -39,8 +39,8 @@ x11grab only works on X11. On a Wayland session run the compositor's own
 screencast tool, or use a nested X server (Xephyr/Xwayland) to share.
 
 Examples:
-    ./scripts/xorg_desktop_share.py --fps 10
-    ./scripts/xorg_desktop_share.py --stretch --stats
+    ./tools/xorg_desktop_share.py --fps 10
+    ./tools/xorg_desktop_share.py --stretch --stats
 '''
 
 import argparse

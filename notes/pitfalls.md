@@ -127,7 +127,7 @@ set(PIO_USE_DMA 0)
 另外 `LZ4_decompress_safe()` 的第 4 个参数传的是 `max_compressed_size`（压缩上界），
 虽然大于等于帧大小因而不出错，但语义上应是目标缓冲容量，建议改成显式的帧大小。
 
-实测（`scripts/img_viewer.py --codec lz4`）：480×320 的照片类内容 LZ4 只有 **2.18:1**
+实测（`tools/img_viewer.py --codec lz4`）：480×320 的照片类内容 LZ4 只有 **2.18:1**
 （140736 B），**超过 64 KB 传输上限**，因此 LZ4 路径实际只能显示非常简单的画面。
 用它之前先确认内容能压到 65535 B 以内。
 
@@ -344,7 +344,7 @@ RP2040 侧剩余堆 ≈ `0x20040000 - __bss_end__(0x2001dce8)` ≈ **136 KB**，
 | RP2350 | 64 KB | 64 KB | 2 × 64 KB | 8（与改前**完全相同**） |
 | RP2040 | 32 KB | 32 KB | 2 × 32 KB | ~15（480 宽 → 22 行/段） |
 
-- 主机不再写死分带大小：驱动与 `scripts/pud_usb.py` 都用 `PUD_CMD_GET_CAPS`
+- 主机不再写死分带大小：驱动与 `tools/pud_usb.py` 都用 `PUD_CMD_GET_CAPS`
   问设备（见 [usb-protocol.md](usb-protocol.md)）。RP2350 上设备报 65536，
   经 `min(65535, …)` 得到 **21835** px（`(65535 - 12 - 16) / 3`）—— 与旧版编译期
   常量一致，所以 RP2350 上分带行为零变化（v1 日志里的 21839 是 12 B EP1 header

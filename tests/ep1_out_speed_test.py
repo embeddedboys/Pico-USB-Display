@@ -18,7 +18,7 @@ For the full use-case matrix (full-screen patterns, partial windows, banding
 overhead) use fps_bench.py instead.
 
 Usage:
-    ./scripts/ep1_out_speed_test.py [--frames N] [--xres W] [--yres H]
+    ./tests/ep1_out_speed_test.py [--frames N] [--xres W] [--yres H]
 
 Reading the output: throughput saturates at the link rate (about 1.0 MB/s on
 full-speed USB). If it drops as the payload grows, the device is not keeping
@@ -31,7 +31,9 @@ import statistics
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# pud_usb lives with the tools, one level up from the tests
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "tools"))
 import pud_usb
 
 # Window heights as a fraction of the panel, full panel width. Bigger windows

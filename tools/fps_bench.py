@@ -33,14 +33,14 @@ The device must NOT be bound to the pud kernel driver; see pud_usb.py for
 the udev rule that avoids needing root.
 
 Usage:
-    ./scripts/fps_bench.py                    # every case
-    ./scripts/fps_bench.py --full             # full-screen only
-    ./scripts/fps_bench.py --partial          # partial only
-    ./scripts/fps_bench.py --frames 200
-    ./scripts/fps_bench.py --image assets/xfce.jpg
-    ./scripts/fps_bench.py --window 64x64 --window 200x100
-    ./scripts/fps_bench.py --pattern solid,noise
-    ./scripts/fps_bench.py --dry-run          # no device needed
+    ./tools/fps_bench.py                    # every case
+    ./tools/fps_bench.py --full             # full-screen only
+    ./tools/fps_bench.py --partial          # partial only
+    ./tools/fps_bench.py --frames 200
+    ./tools/fps_bench.py --image assets/xfce.jpg
+    ./tools/fps_bench.py --window 64x64 --window 200x100
+    ./tools/fps_bench.py --pattern solid,noise
+    ./tools/fps_bench.py --dry-run          # no device needed
 
 numpy builds and packs the test patterns; the QOI encoder, protocol and
 device handling come from pud_usb, so there is only one encoder to maintain.

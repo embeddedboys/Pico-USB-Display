@@ -226,7 +226,7 @@ struct pud_caps {
 
 **必须校验 `magic`**：没有这个命令的固件会用 EP2 缓冲里的残留内容应答
 （实测：`cmd=0x7f` 曾返回上一次的 caps），所以"发回来 16 字节"不等于"支持该命令"。
-驱动与 `scripts/pud_usb.py` 都在 magic 不匹配时退回本机默认值（65535 B / 21835 px，
+驱动与 `tools/pud_usb.py` 都在 magic 不匹配时退回本机默认值（65535 B / 21835 px，
 面板 480×320/旋转 0），并打印一条告警；只回了 16 字节的老固件同样按"没有面板参数"
 处理（驱动日志里会写 `old firmware: no panel parameters`）。
 RP2350 上 `frame_max=65536` 经 `min(65535, …)` 后与改前的编译期常量**完全一致**，
@@ -315,8 +315,8 @@ struct pud_param_state {
 ### 用户态验证（不需要内核驱动）
 
 ```bash
-python3 scripts/param_test.py              # 自检：调暗/调亮并读回，再验不支持字段被上报
-python3 scripts/param_test.py --brightness 30   # 只设一个值并读回
+python3 tests/param_test.py              # 自检：调暗/调亮并读回，再验不支持字段被上报
+python3 tests/param_test.py --brightness 30   # 只设一个值并读回
 ```
 
 `pud_usb.py` 里的 `Display.set_params()` / `Display.get_params()` 是这两个命令的实现，

@@ -121,16 +121,16 @@ pip install pyusb Pillow numpy     # numpy is only needed by codec_compare/fps_b
 
 If you want to show a picture on pico display:
 ```bash
-# Usage: ./scripts/img_viewer.py [--xres N] [--yres N] <file.jpg>
+# Usage: ./tools/img_viewer.py [--xres N] [--yres N] <file.jpg>
 
-./scripts/img_viewer.py --xres 480 --yres 320 ~/Pictures/artplayer_19_21.png
+./tools/img_viewer.py --xres 480 --yres 320 ~/Pictures/artplayer_19_21.png
 ```
 
 Or you want to play a video on the pico display:
 ```bash
-# Usage: ./scripts/video_player.py [--xres N] [--yres N] [--fps N] [--codec qoi|rle|lz4] <video.mp4>
+# Usage: ./tools/video_player.py [--xres N] [--yres N] [--fps N] [--codec qoi|rle|lz4] <video.mp4>
 
-./scripts/video_player.py --xres 480 --yres 320 --fps 15 ~/Videos/jazz_15fps.mp4
+./tools/video_player.py --xres 480 --yres 320 --fps 15 ~/Videos/jazz_15fps.mp4
 ```
 
 You probably also want to know how to set the video to 15fps:

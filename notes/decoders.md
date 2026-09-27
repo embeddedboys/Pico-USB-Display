@@ -47,7 +47,7 @@ static uint16_t lz4_band[LZ4_BAND_PIXELS];
 （`decoder_draw_bootlogo()`）。生成方式见 [scripts.md](scripts.md)，重新生成的这一支
 **同时修掉了**"LZ4 分支与其它三支不是同一张图"的老问题。
 
-**实测（480×320，分带，`scripts/codec_compare.py`，20 帧）**：
+**实测（480×320，分带，`tools/codec_compare.py`，20 帧）**：
 
 | 内容 | LZ4 字节/帧 | LZ4 端到端 | QOI | RLE |
 | --- | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ LZ4 的压缩率在结构化内容上明显好于 RLE、和 QOI 各有胜负，�
 ### 桌面负载下的选型（2026-09 实测，真实桌面）
 
 项目面向桌面（配合 DRM 驱动做显示镜像），主负载是**局部刷新**：整屏照片/噪声测试不代表
-它。`scripts/desktop_codecs.py` 按“桌面会脏的矩形”逐个比较，内容用**板子自己的真实桌面**
+它。`tools/desktop_codecs.py` 按“桌面会脏的矩形”逐个比较，内容用**板子自己的真实桌面**
 ——HDMI 会话截屏（3840×2160），两种用法各测一遍：
 
 - `real_downscaled`：整屏缩到 480×320（整屏镜像）
@@ -240,7 +240,7 @@ RLE 来自独立仓库 `rgb565-rle`（MIT），vendored 在 `src/decoders/rle/`�
 | `decoder_task` 栈峰值 | 464 B | 496 B |
 | flash（text+data） | 177888 B | 158992 B |
 
-（端到端四列依次是 solid / gradient / photo / noise；由 `scripts/codec_compare.py` 测，
+（端到端四列依次是 solid / gradient / photo / noise；由 `tools/codec_compare.py` 测，
 内容是同一份，只换编码器。）
 
 **结论：链路是瓶颈（EP1 约 1.1 MB/s），所以端到端快慢基本由压缩率决定。** 结构化内容

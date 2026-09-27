@@ -11,13 +11,13 @@ Regenerate include/bootlogo.h from assets/bootlogo.png.
 
 One branch per decoder family, each produced by tools/pudcodec from the same
 asset -- jpeg (DECODER_TYPE 0 and 1), lz4 (2), qoi (3), rle (4).  The asset
-has to be lossless: scripts/check_pudcodec.py rebuilds these streams from
+has to be lossless: tests/check_pudcodec.py rebuilds these streams from
 assets/bootlogo.png through Pillow and expects them byte for byte, and with a
 JPEG source the two decoders disagree (IDCT rounding).
 
     cmake -S tools -B tools/build && cmake --build tools/build
-    python3 scripts/mkbootlogo.py            # rewrite include/bootlogo.h
-    python3 scripts/mkbootlogo.py --check    # compare only, write nothing
+    python3 tools/mkbootlogo.py            # rewrite include/bootlogo.h
+    python3 tools/mkbootlogo.py --check    # compare only, write nothing
 
 bootlogo.h is generated, so this only rewrites the byte rows between each
 array's braces and leaves the markers, comments and declarations where they

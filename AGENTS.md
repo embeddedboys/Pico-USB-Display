@@ -136,24 +136,24 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 | `QOI_NONCALLBACK` | `2` | QOI 走非回调 API + band 乒乓；设备侧比回调版快 22~48%，代价是 87 KB 缓冲（`0`/`1` 只用于 A/B 和回落，[decoders.md](notes/decoders.md)） |
 | `DECODER_STATS` | `0` | 解码/刷屏耗时计数器（`g_qoi_stat_*`），调试用 |
 
-## 用户空间工具（`scripts/` 与 `tools/`）
+## 用户空间工具（`tools/`）与验证脚本（`tests/`）
 
 - **不加载内核驱动就能验证全部功能**（pyusb 直连），比反复 insmod/rmmod 快得多。
   这是首选的验证方式。
 - **依赖选型**：`pyusb` + `Pillow`（≈3 MB，用来替代 `opencv-python` 的 ≈60 MB）；
   视频/录屏用 `ffmpeg` CLI；`numpy` **可选**（只影响 RGB565 打包速度）。
-- **每种编码器只保留一份**，都在 `scripts/pud_usb.py`（`ENCODERS`）：QOI 与 RLE 各自与
-  它们的 C 库**逐字节一致**（`python3 scripts/pud_usb.py` 自检里有参考向量），LZ4 用
+- **每种编码器只保留一份**，都在 `tools/pud_usb.py`（`ENCODERS`）：QOI 与 RLE 各自与
+  它们的 C 库**逐字节一致**（`python3 tools/pud_usb.py` 自检里有参考向量），LZ4 用
   `lz4.block`（就是内核链接的那份 liblz4；它的码流**跨版本不保证逐字节一致**，但都能解）。
   新脚本必须复用它们，不要再写第二份编码器或第二套协议常量。
   发图统一走 `Display.send_rgb565(..., codec=...)`，**分带由它负责**（LZ4 尤其不能整帧发）。
 - `tools/pudcodec` 是 C 写的**离线**转换器（图片/帧序列 ↔ 码流），编解码类型运行时用
   `--codec` 指定；构建 `cmake -S tools -B tools/build`，`stb` 已 vendor 不需要联网。
-  它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `scripts/check_pudcodec.py` 对拍。
+  它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `tests/check_pudcodec.py` 对拍。
   `--codec lz4` 输出的是 **band 容器**（每 band 一个 block，`--band` 默认取能整除高度的
   最大行数），因为整帧 block 设备解不了（见"架构不变量"第 9 条）。
 - 本项目面向**桌面**（配合 DRM 驱动），主负载是**局部刷新**：评估编解码器用
-  `scripts/desktop_codecs.py`（按"桌面会脏的矩形"比较），整屏照片/噪声测试**不代表**它。
+  `tools/desktop_codecs.py`（按"桌面会脏的矩形"比较），整屏照片/噪声测试**不代表**它。
   真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**（载荷少 15~35%，三者都跑在
   1.0~1.1 MB/s 的链路极限上）；LZ4 的优势在内核侧（不用 vendor 编码器），不是性能
   （见 [notes/decoders.md](notes/decoders.md)）。**给设备计时必须把编码放在循环外**，

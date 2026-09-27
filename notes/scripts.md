@@ -1,4 +1,4 @@
-# 用户空间工具（scripts/）
+# 用户空间工具（tools/）与验证脚本（tests/）
 
 固件烧好之后，不必加载内核驱动就能验证全部功能：这些脚本直接用 pyusb 跟设备
 说话，走的正是驱动使用的那套协议。调试显示链路、量测带宽、验证解码器时，
@@ -45,7 +45,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 QOI 编码器**（与固件/驱动共用的 `rgb565_qoi.c` 逐字节一致，自检见下）。
 
 ```bash
-python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码器
+python3 tools/pud_usb.py      # 自检：对照 C 库参考向量校验编码器
 ```
 
 主要接口：
@@ -68,20 +68,33 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 
 ## 脚本一览
 
+**三个目录，各管一件事**：
+
+- `tools/` 放工具与演示（发图、播放、录屏、生成 bootlogo，以及 C 写的离线转换器
+  `pudcodec`），共享库 `tools/pud_usb.py` 也在那里 —— 工具和测试都 import 它。
+- `tests/` 放**验证脚本**：目的是"跑一遍给出对/错"（读回核对、退出码非零即失败）。
+  它们各自 `sys.path.insert` 到 `tools/` 才能 import `pud_usb`，所以**从仓库根目录跑**，
+  别单独 `cd tests`。
+- `scripts/` 是**构建脚本**（`build.sh` / `lunch.sh` / `flash.sh` / `config-info.sh`，
+  由根目录 `./build.sh` 调用），跟设备无关，见 [build-and-flash.md](build-and-flash.md)。
+
+三个目录都不需要内核驱动，前面两个都用 pyusb 直连。
+
 | 脚本 | 作用 | 依赖 |
 | --- | --- | --- |
-| `img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
-| `video_player.py` | 播放视频（不落盘，`--codec` 同上） | ffmpeg |
-| `fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
-| `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
-| `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
-| `param_test.py` | 运行期参数通道测试（`SET_PARAM`/`GET_PARAM`）：调暗/调亮并读回，再验不被支持的字段被如实上报 | 无 |
-| `touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
-| `touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
-| `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
-| `desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
-| `xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
-| `mkbootlogo.py` | 从 `assets/bootlogo.png` 重新生成 `include/bootlogo.h`（四个分支，落盘前自校验；`--check` 只比对） | 无（需 `tools/build/pudcodec`） |
+| `tools/img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
+| `tools/video_player.py` | 播放视频（不落盘，`--codec` 同上） | ffmpeg |
+| `tools/fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
+| `tests/ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
+| `tests/ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
+| `tests/param_test.py` | 运行期参数通道测试（`SET_PARAM`/`GET_PARAM`）：调暗/调亮并读回、转一次朝向并核对 caps 几何跟着交换，再验不受支持的字段被如实上报 | 无 |
+| `tests/rotation_test.py` | **单独的旋转测试**：四种朝向走一遍，每种按 caps 报的几何画一张非对称图案（绿箭头指逻辑上边 + 朝向号 + 尺寸）发过去，看画面是否始终正立 | Pillow |
+| `tests/touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
+| `tools/touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
+| `tools/codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
+| `tools/desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
+| `tools/xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
+| `tools/mkbootlogo.py` | 从 `assets/bootlogo.png` 重新生成 `include/bootlogo.h`（四个分支，落盘前自校验；`--check` 只比对） | 无（需 `tools/build/pudcodec`） |
 
 > 发图统一走 `img_viewer.py`，LZ4 用 `img_viewer.py --codec lz4` —— 原来那个
 > `lz4_img_viewer.py` 与它完全重复（脚本自己的 docstring 就写了"`--codec lz4` does the
@@ -90,13 +103,13 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 典型用法：
 
 ```bash
-python3 scripts/img_viewer.py assets/xfce.jpg
-python3 scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 assets/bootlogo.png
-python3 scripts/video_player.py --fps 8 --frames 200 ~/Videos/jazz.mp4
-python3 scripts/fps_bench.py --frames 200
-python3 scripts/fps_bench.py --dry-run          # 不接设备也能看各用例载荷大小
-python3 scripts/ep1_out_speed_test.py
-python3 scripts/xorg_desktop_share.py --fps 15 --stats
+python3 tools/img_viewer.py assets/xfce.jpg
+python3 tools/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 assets/bootlogo.png
+python3 tools/video_player.py --fps 8 --frames 200 ~/Videos/jazz.mp4
+python3 tools/fps_bench.py --frames 200
+python3 tools/fps_bench.py --dry-run          # 不接设备也能看各用例载荷大小
+python3 tests/ep1_out_speed_test.py
+python3 tools/xorg_desktop_share.py --fps 15 --stats
 ```
 
 ## 实测数据（供对照）
@@ -129,9 +142,9 @@ python3 scripts/xorg_desktop_share.py --fps 15 --stats
 ## 触摸（`touch_test.py`）
 
 ```bash
-python3 scripts/touch_test.py                    # 推送模式，听 10 s，边摸边打印
-python3 scripts/touch_test.py --mode poll        # REQ_EP4_IN 轮询模型
-python3 scripts/touch_test.py --calibrate        # 另给触摸包围盒，判断轴序/反向
+python3 tests/touch_test.py                    # 推送模式，听 10 s，边摸边打印
+python3 tests/touch_test.py --mode poll        # REQ_EP4_IN 轮询模型
+python3 tests/touch_test.py --calibrate        # 另给触摸包围盒，判断轴序/反向
 ```
 
 设备主动推送 8 字节报告（布局见 [usb-protocol.md](usb-protocol.md)），所以主机只是
@@ -148,9 +161,9 @@ python3 scripts/touch_test.py --calibrate        # 另给触摸包围盒，判�
 上报的坐标处**打标记，所以轴序交换、反向、旋转不跟随、贴合偏移一眼就能看出来：
 
 ```bash
-python3 scripts/touch_draw.py                 # trace：标记跟着手指走（默认）
-python3 scripts/touch_draw.py --mode grid     # 40 px 网格 + 坐标标签，按下处打点
-python3 scripts/touch_draw.py --mode targets  # 依次点 5 个十字靶，输出每个靶的误差
+python3 tools/touch_draw.py                 # trace：标记跟着手指走（默认）
+python3 tools/touch_draw.py --mode grid     # 40 px 网格 + 坐标标签，按下处打点
+python3 tools/touch_draw.py --mode targets  # 依次点 5 个十字靶，输出每个靶的误差
 ```
 
 - `trace`/`grid` 摸就行；`grid` 会在标记旁写上设备报的 `x,y`，直接读数。
@@ -173,9 +186,9 @@ sequence 全程只跳 2 次，**板子没有挂**。同一批数据在 [usb-prot
 这个项目面向桌面，主负载是**局部刷新**，整屏照片测试不代表它，所以单独有一份负载：
 
 ```bash
-python3 scripts/desktop_codecs.py                                          # 合成桌面，只算载荷
-python3 scripts/desktop_codecs.py --image shot.png                         # 用真实桌面截图
-python3 scripts/desktop_codecs.py --image shot.png --device --codec lz4     # 再上板测时间
+python3 tools/desktop_codecs.py                                          # 合成桌面，只算载荷
+python3 tools/desktop_codecs.py --image shot.png                         # 用真实桌面截图
+python3 tools/desktop_codecs.py --image shot.png --device --codec lz4     # 再上板测时间
 ```
 
 按“桌面会脏的矩形”逐个比较（默认合成一帧 480×320 桌面；给了 `--image` 就用真实截图）。
@@ -216,7 +229,7 @@ GNOME/Wayland 的坑）、两套真实内容（整屏缩放到 480×320 / 4K 里
 Xvfb :99 -screen 0 1280x720x24 &
 DISPLAY=:99 xsetroot -solid steelblue
 DISPLAY=:99 xclock -update 1 -geometry 260x260+900+60 &
-python3 scripts/xorg_desktop_share.py --display :99 --fps 15 --stats
+python3 tools/xorg_desktop_share.py --display :99 --fps 15 --stats
 ```
 
 验证结果：只发出时钟区域变化的小块（如 `41x56 @ (359,54)`、`69x38 @ (358,75)`），
@@ -268,13 +281,13 @@ band 缓冲（43678 B）且能整除图像高度"的最大行数，这样 band �
 `block 数 / 图像高度` 推回来，`s2img` 与固件的开机 logo 才能重建。
 `video2s --codec lz4` 对每一帧都这样分带，容器是**扁平的**（帧优先，一帧内自上而下）。
 
-开机 logo 的四个分支（jpeg / lz4 / qoi / rle）都由 `scripts/mkbootlogo.py` 从同一个资产
+开机 logo 的四个分支（jpeg / lz4 / qoi / rle）都由 `tools/mkbootlogo.py` 从同一个资产
 重新生成：
 
 ```bash
 cmake -S tools -B tools/build && cmake --build tools/build   # 先有工具
-python3 scripts/mkbootlogo.py            # 重写 include/bootlogo.h
-python3 scripts/mkbootlogo.py --check    # 只比对，不改文件
+python3 tools/mkbootlogo.py            # 重写 include/bootlogo.h
+python3 tools/mkbootlogo.py --check    # 只比对，不改文件
 ```
 
 资产必须是**无损**的（现在是 `assets/bootlogo.png`）：`check_pudcodec.py` 第 7 项会拿
@@ -284,10 +297,10 @@ Pillow 解出的像素重压一遍再和分支逐字节比，JPEG 源会因两�
 
 ## 与固件/脚本的一致性（2026-09 实测）
 
-`scripts/check_pudcodec.py` 把这条路径与 `pud_usb.py` 对拍，**不需要设备**：
+`tests/check_pudcodec.py` 把这条路径与 `pud_usb.py` 对拍，**不需要设备**：
 
 ```bash
-python3 scripts/check_pudcodec.py     # 全部通过才返回 0
+python3 tests/check_pudcodec.py     # 全部通过才返回 0
 ```
 
 | 检查 | 结果 |
@@ -325,8 +338,8 @@ numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0
 
 | 命令 | 结果 |
 | --- | --- |
-| `python3 scripts/pud_usb.py` | 自检通过；QOI/RLE 与 C 库参考向量一致，band limit 报 **21835**；没有 numpy 时自动走纯 Python 打包路径 |
-| `python3 scripts/check_pudcodec.py` | 28 项断言 **27 通过**，唯一 FAIL 是上面那条已知的 LZ4 版本差异 |
+| `python3 tools/pud_usb.py` | 自检通过；QOI/RLE 与 C 库参考向量一致，band limit 报 **21835**；没有 numpy 时自动走纯 Python 打包路径 |
+| `python3 tests/check_pudcodec.py` | 28 项断言 **27 通过**，唯一 FAIL 是上面那条已知的 LZ4 版本差异 |
 | `pud_usb.open_device()`（读 caps） | `proto 2 / frame_max 65536 / decoder 3 / band_pixels 21835`；面板 `480x320 rotation 1 16bpp 50000kHz touch poll 10ms 70x40mm touch True` —— 与固件/驱动文档**逐字段一致** |
 | `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg`（当时那张） | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
 | 同上，换成现在的开机图 `assets/bootlogo.png` | `sent 8 bands, 13074 B in 26.8 ms` —— **载荷与时间仍只有原来的一半** |
@@ -344,7 +357,7 @@ numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0
 两个要注意的（都不是设备的问题）：
 
 - **`touch_test.py` 的 push 模式在"面板空闲"时会误报**：没人碰时收不到报告，脚本据此断定
-  "固件不支持触摸"（`scripts/touch_test.py` 结尾那段），而本机 `caps['touch']` 是 True、
+  "固件不支持触摸"（`tests/touch_test.py` 结尾那段），而本机 `caps['touch']` 是 True、
   poll 模式拿到了 `version = 1`、真去摸面板也能立刻收到 8.0 ms 间隔的报告并正常退出。
   判据应该用 caps 的 `touch` 位（或先 poll 一次）来区分"没人碰"和"没实现"；现在空闲场景下
   的文案和 exit 1 是**假阴性**。另外 `--mode poll` 每条报告后固定 200 ms 的间隔是脚本自己的

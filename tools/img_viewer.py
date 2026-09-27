@@ -19,7 +19,7 @@ notes/scripts.md); this checks the capability report and refuses to send a
 codec the device would drop without an error.
 
 Usage:
-    ./scripts/img_viewer.py [options] <image>
+    ./tools/img_viewer.py [options] <image>
 
 Options:
     --xres W        panel width  (default 480)
@@ -33,10 +33,10 @@ Options:
     --timer         print per-send timing
 
 Examples:
-    ./scripts/img_viewer.py assets/xfce.jpg
-    ./scripts/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 \\
+    ./tools/img_viewer.py assets/xfce.jpg
+    ./tools/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 \\
         assets/bootlogo.png
-    ./scripts/img_viewer.py --codec lz4 assets/xfce.jpg     # DECODER_TYPE=2
+    ./tools/img_viewer.py --codec lz4 assets/xfce.jpg     # DECODER_TYPE=2
 '''
 
 import argparse

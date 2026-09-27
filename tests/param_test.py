@@ -26,15 +26,17 @@ test --
 a field it cannot do was reported as applied anyway.
 
 Usage:
-    ./scripts/param_test.py [--keep]        # --keep leaves the brightness at 80%
-    ./scripts/param_test.py --brightness 30 # just set one field and read back
+    ./tests/param_test.py [--keep]        # --keep leaves the brightness at 80%
+    ./tests/param_test.py --brightness 30 # just set one field and read back
 '''
 
 import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# pud_usb lives with the tools, one level up from the tests
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "tools"))
 import pud_usb
 
 
@@ -86,30 +88,60 @@ def main():
                     sys.exit("brightness read-back mismatch: asked %d, got %d"
                              % (level, state["brightness"]))
 
-            # 2. the fields that are not implemented yet: they must be reported,
-            #    not silently accepted
-            want = pud_usb.PARAM_ROTATION | pud_usb.PARAM_DECODER
-            disp.set_params(mask=want, rotation=(before["rotation"] + 1) % 4,
-                            decoder=3)
+            # 2. rotation: supported now.  The panel turns, and the capability
+            #    report has to follow it -- that is what the host builds its
+            #    mode from, so the geometry swapping is the check that matters.
+            caps_before = disp.query_caps()
+            other = (before["rotation"] + 1) % 4
+            disp.set_params(mask=pud_usb.PARAM_ROTATION, rotation=other)
             state = disp.get_params()
-            show("rejected", state)
-            if state["rejected"] != want:
-                sys.exit("expected rejection of %s, got %s"
-                         % (pud_usb.param_names(want),
-                            pud_usb.param_names(state["rejected"])))
-            if state["rotation"] != before["rotation"]:
-                sys.exit("rotation changed although the build cannot set it")
-            print("unsupported fields reported correctly: %s"
+            show("rotation", state)
+            if state["rejected"] & pud_usb.PARAM_ROTATION:
+                sys.exit("rotation came back as rejected")
+            if state["rotation"] != other:
+                sys.exit("rotation read-back mismatch: asked %d, got %d"
+                         % (other, state["rotation"]))
+
+            caps_after = disp.query_caps()
+            if caps_after["rotation"] != other:
+                sys.exit("caps still report rotation %d after setting %d"
+                         % (caps_after["rotation"], other))
+            # a quarter turn swaps the frame; half a turn does not
+            swapped = (other ^ before["rotation"]) & 1
+            want_xy = ((caps_before["yres"], caps_before["xres"]) if swapped
+                       else (caps_before["xres"], caps_before["yres"]))
+            got_xy = (caps_after["xres"], caps_after["yres"])
+            print("geometry   %dx%d -> %dx%d (rotation %d -> %d)"
+                  % (caps_before["xres"], caps_before["yres"],
+                     caps_after["xres"], caps_after["yres"],
+                     caps_before["rotation"], caps_after["rotation"]))
+            if got_xy != want_xy:
+                sys.exit("expected %dx%d after the turn, device reports %dx%d"
+                         % (want_xy[0], want_xy[1], got_xy[0], got_xy[1]))
+
+            # 3. the field that is still a build-time choice: it must be
+            #    reported, not silently accepted
+            disp.set_params(mask=pud_usb.PARAM_DECODER, decoder=3)
+            state = disp.get_params()
+            show("decoder", state)
+            if state["rejected"] != pud_usb.PARAM_DECODER:
+                sys.exit("expected the decoder to be rejected, got %s"
+                         % pud_usb.param_names(state["rejected"]))
+            print("unsupported field reported correctly: %s"
                   % pud_usb.param_names(state["rejected"]))
 
-            # 3. put the backlight back the way we found it
+            # 4. put everything back the way we found it
             if not args.keep:
+                disp.set_params(mask=pud_usb.PARAM_ROTATION,
+                                rotation=before["rotation"])
                 disp.set_params(mask=pud_usb.PARAM_BRIGHTNESS,
                                 brightness=before["brightness"])
                 state = disp.get_params()
                 show("restored", state)
                 if state["brightness"] != before["brightness"]:
                     sys.exit("could not restore the backlight")
+                if state["rotation"] != before["rotation"]:
+                    sys.exit("could not restore the rotation")
 
             print("ok")
     except pud_usb.PudError as exc:

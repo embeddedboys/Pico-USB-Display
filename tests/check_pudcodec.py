@@ -6,7 +6,7 @@ There are two host paths to the same codec stream -- the C tool and
 script drives the built tool and compares; no device is involved.
 
     cd build:   cmake -S tools -B tools/build && cmake --build tools/build
-    run:        python3 scripts/check_pudcodec.py
+    run:        python3 tests/check_pudcodec.py
 
 Checks:
   1. img2s (png source)  ==  the python encoder, byte for byte
@@ -27,7 +27,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 TOOL = REPO / "tools" / "build" / "pudcodec"
-sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "tools"))
 
 W, H = 480, 320
 fails = []

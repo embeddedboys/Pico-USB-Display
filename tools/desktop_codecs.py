@@ -15,8 +15,8 @@ Two halves, both optional:
   device side (--device): per-region round trip for the codec the device is
                           built with (DECODER_TYPE); rebuild/flash to compare
 
-    ./scripts/desktop_codecs.py                      # sizes only
-    ./scripts/desktop_codecs.py --device --codec lz4 # + timing, LZ4 firmware
+    ./tools/desktop_codecs.py                      # sizes only
+    ./tools/desktop_codecs.py --device --codec lz4 # + timing, LZ4 firmware
 
 Requires Pillow; numpy and the lz4 package are optional.  The LZ4 sizes come
 from tools/pudcodec (build it first), so the host side needs no lz4 binding.

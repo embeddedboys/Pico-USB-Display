@@ -15,9 +15,9 @@ report where the device says you touched, so an axis swap, an inversion, a
 rotation that does not follow the display or an offset from the panel lamination
 is immediately visible instead of being a table of numbers.
 
-    ./scripts/touch_draw.py                  # trace: the mark follows your finger
-    ./scripts/touch_draw.py --mode grid      # reference grid + the mark
-    ./scripts/touch_draw.py --mode targets   # touch 5 crosshairs, get the error
+    ./tools/touch_draw.py                  # trace: the mark follows your finger
+    ./tools/touch_draw.py --mode grid      # reference grid + the mark
+    ./tools/touch_draw.py --mode targets   # touch 5 crosshairs, get the error
 
 Modes:
     trace    a trail of dots where you touched (the default)

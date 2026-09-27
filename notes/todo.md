@@ -76,7 +76,7 @@ RP2040（Cortex-M0+）**没有 PSPLIM**，任务栈溢出是静默踩内存（RP
 - 注意 band 的**原始**大小（`像素数 × 2`）也要 ≤ 那 43680 B，本设计里两者是同一个限制。
 
 驱动现在的 `rgb565_qoi.c` 就是"多余源文件"的例子，接完 LZ4 可以删掉。
-用户层怎么测的：`scripts/img_viewer.py --codec lz4`、`scripts/codec_compare.py --codec lz4`。
+用户层怎么测的：`tools/img_viewer.py --codec lz4`、`tools/codec_compare.py --codec lz4`。
 
 ## 8. "小矩形连发打挂 USB"：**未复现，已否定**；另有一次未定因的 HardFault
 

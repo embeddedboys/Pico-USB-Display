@@ -25,7 +25,7 @@ Note the two limits this script cannot beat:
     Passing --fps below that keeps playback smooth instead of dropped.
 
 Usage:
-    ./scripts/video_player.py [options] <video>
+    ./tools/video_player.py [options] <video>
 
 Options:
     --xres W, --yres H   panel size (default 480x320)
@@ -37,8 +37,8 @@ Options:
     --stats              print a timing line every second
 
 Examples:
-    ./scripts/video_player.py --fps 8 ~/Videos/jazz.mp4
-    ./scripts/video_player.py --frames 100 --stats test.mp4
+    ./tools/video_player.py --fps 8 ~/Videos/jazz.mp4
+    ./tools/video_player.py --frames 100 --stats test.mp4
 '''
 
 import argparse

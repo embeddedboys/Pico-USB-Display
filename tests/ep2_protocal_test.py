@@ -15,7 +15,7 @@ The only command implemented today is CMD_GET_SN = 0x01, which returns the
 8-byte board unique id.
 
 Usage:
-    ./scripts/ep2_protocal_test.py [--repeat N] [--raw]
+    ./tests/ep2_protocal_test.py [--repeat N] [--raw]
 
 Exit status is non-zero if the device is missing or a reply has the wrong
 length, so this is usable as a smoke test in a script.
@@ -26,7 +26,9 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# pud_usb lives with the tools, one level up from the tests
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "tools"))
 import pud_usb
 
 

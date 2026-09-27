@@ -19,9 +19,9 @@ instead (ask for one report, then read it), which is what the first version of
 the kernel driver did; comparing the two shows whether the handshake is the
 problem or the reports themselves.
 
-    ./scripts/touch_test.py                 # push mode, 10 s
-    ./scripts/touch_test.py --mode poll     # request/read handshake
-    ./scripts/touch_test.py --calibrate     # touch all four corners
+    ./tests/touch_test.py                 # push mode, 10 s
+    ./tests/touch_test.py --mode poll     # request/read handshake
+    ./tests/touch_test.py --calibrate     # touch all four corners
 
 Exit status is non-zero if EP4 never reports a version (touch not implemented in
 the running firmware) or a report fails to parse.
@@ -33,7 +33,9 @@ import statistics
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# pud_usb lives with the tools, one level up from the tests
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "tools"))
 import pud_usb
 
 

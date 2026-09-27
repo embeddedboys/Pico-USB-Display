@@ -310,7 +310,7 @@ calling freertos scheduler, <us>
 
 > 完整的脚本清单、共享模块与依赖选型见 [scripts.md](scripts.md)。
 
-`scripts/fps_bench.py` 是主机端**端到端**基准：计时段只包含 EP0 控制请求 + EP1
+`tools/fps_bench.py` 是主机端**端到端**基准：计时段只包含 EP0 控制请求 + EP1
 批量传输，帧编码在计时前预先生成、不计入，所以数字反映的是链路 + 设备，而不是 Python。
 
 它要求设备**没有被 `pud` 驱动占用**（pyusb 需要 claim 接口）：
@@ -318,13 +318,13 @@ calling freertos scheduler, <us>
 ```bash
 sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/   # 装一次，之后免 root
 sudo rmmod pud
-./scripts/fps_bench.py --frames 200
+./tools/fps_bench.py --frames 200
 ```
 
 不带设备也能先看各用例的载荷大小：
 
 ```bash
-./scripts/fps_bench.py --dry-run
+./tools/fps_bench.py --dry-run
 ```
 
 用例与关注点：

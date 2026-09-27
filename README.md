@@ -121,16 +121,16 @@ pip install pyusb Pillow numpy     # numpy 只有 codec_compare/fps_bench/check_
 
 如果您想在 pico 显示器上显示图片：
 ```bash
-# 用法: ./scripts/img_viewer.py [--xres N] [--yres N] <file.jpg>
+# 用法: ./tools/img_viewer.py [--xres N] [--yres N] <file.jpg>
 
-./scripts/img_viewer.py --xres 480 --yres 320 ~/Pictures/artplayer_19_21.png
+./tools/img_viewer.py --xres 480 --yres 320 ~/Pictures/artplayer_19_21.png
 ```
 
 或者您想在 pico 显示器上播放视频：
 ```bash
-# 用法: ./scripts/video_player.py [--xres N] [--yres N] [--fps N] [--codec qoi|rle|lz4] <video.mp4>
+# 用法: ./tools/video_player.py [--xres N] [--yres N] [--fps N] [--codec qoi|rle|lz4] <video.mp4>
 
-./scripts/video_player.py --xres 480 --yres 320 --fps 15 ~/Videos/jazz_15fps.mp4
+./tools/video_player.py --xres 480 --yres 320 --fps 15 ~/Videos/jazz_15fps.mp4
 ```
 
 您可能还想知道如何将视频设置为 15fps：

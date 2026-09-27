@@ -11,9 +11,9 @@ The device must be flashed with the matching ``DECODER_TYPE`` -- run this once
 per codec and compare the two runs:
 
     # with DECODER_TYPE=3 (QOI)
-    ./scripts/codec_compare.py --frames 100 --codec qoi
+    ./tools/codec_compare.py --frames 100 --codec qoi
     # then flash DECODER_TYPE=4 (RLE) and
-    ./scripts/codec_compare.py --frames 100 --codec rle
+    ./tools/codec_compare.py --frames 100 --codec rle
 
 Measurements use ``fps_bench.measure()`` (control request + bulk transfer, no
 encoding inside the timing loop) so the numbers are comparable with the ones in
