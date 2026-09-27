@@ -186,6 +186,10 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 - 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
   **文件名里的 `60-` 不能退回 `50-`** —— 会被
   `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。
+  这份规则**同时放行面板（`2e8a:0001`）和 BOOTSEL 里的 bootrom**
+  （`0003`/`000f`，外加 SDK `stdio_usb` 的 `0009`/`000a`；PID 取自 picotool 自己的规则）
+  —— 只放行 `0001` 时
+  `picotool` 会报 `unable to connect. Maybe try 'sudo'`。改了规则要重新插拔设备。
 - 用法与实测数据见 [`notes/scripts.md`](notes/scripts.md)。
 
 ## 代码约定

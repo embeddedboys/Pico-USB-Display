@@ -97,6 +97,11 @@ sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 # 然后重新加载 udev 规则
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
+这份规则同时放行**面板**（`2e8a:0001`）和**在 BOOTSEL 里的板子**（bootrom
+`2e8a:0003`，RP2350 是 `000f`；另外 `0009`/`000a` 是 SDK `stdio_usb` 的应用态 PID），
+所以烧固件（`picotool`）也不用 root。
+**文件名前缀别降到 `50-`**：那会被 `/usr/lib/udev/rules.d/50-udev-default.rules` 盖掉，
+等于没装。规则改动后要重新插拔板子（或上面那条 `udevadm trigger`）才生效。
 
 #### 7. 将固件烧录到您的 Pico 开发板
 

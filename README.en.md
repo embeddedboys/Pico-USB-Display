@@ -97,6 +97,13 @@ sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 # Then reload the udev rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
+The rules cover both the **panel** (`2e8a:0001`) and the board sitting in
+**BOOTSEL** (bootrom `2e8a:0003`; `000f` on the RP2350, and `0009`/`000a` are the
+SDK `stdio_usb` application PIDs), so
+flashing with `picotool` needs no root either.  **Do not lower the file name
+prefix to `50-`**: `/usr/lib/udev/rules.d/50-udev-default.rules` overrides it and
+the rule does nothing.  Re-plug the board (or run the `udevadm trigger` above)
+for a rules change to take effect.
 
 #### 7. Flash the firmware to your Pico board
 

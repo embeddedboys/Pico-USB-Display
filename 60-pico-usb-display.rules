@@ -1,1 +1,23 @@
+# udev rules for the panel and for the board while it sits in BOOTSEL.
+#
+# Copy this file to /etc/udev/rules.d/ and reload udev.  Keep a prefix above 50-
+# (this repository uses 60-): a 50- file is overridden by
+# /usr/lib/udev/rules.d/50-udev-default.rules and then does nothing at all.
+#
+# MODE="0666" is what the userspace tools and the DRM driver need for the panel
+# (2e8a:0001) and what picotool needs for the bootrom, so neither has to run as
+# root.  Tighter alternatives are GROUP="plugdev" MODE="0660" plus
+# TAG+="uaccess", which is what picotool's own udev/60-picotool.rules uses.
+
+# Pico USB Display (the firmware's vendor interface)
 SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="0001", MODE="0666"
+
+# RP-series bootrom (BOOTSEL) and the SDK's CDC firmware: picotool, and the uf2
+# drag & drop path.  The PIDs are the ones picotool's own 60-picotool.rules lists,
+# which are also the ones it can talk to: 0003 = RP2040 USB boot, 000f = RP2350
+# USB boot, 0009/000a = Pico SDK stdio_usb CDC (RP2350/RP2040 app mode, i.e. a
+# running program that can be asked to reboot into BOOTSEL).
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="0003", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="0009", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="000a", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="000f", MODE="0666"

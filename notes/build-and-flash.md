@@ -167,6 +167,20 @@ CMake 还提供了 `flash` 目标（`CMakeLists.txt` 里按板子选 `target/rp2
       -c "init" -c "targets rp2040.core0" -c "halt" -c "flash probe 0" \
       -c "rp2xxx rom_api_call UB 0 0" -c "shutdown"
   ```
+- 它还要**打得开 BOOTSEL 设备**：udev 规则必须放行 bootrom（`2e8a:0003`，RP2350 是 `000f`）。
+  仓库的 `60-pico-usb-display.rules` 已经放行了面板、两个 bootrom，外加 SDK `stdio_usb` 的
+  `0009`/`000a`（PID 取自 picotool 自己的 `udev/60-picotool.rules`，注释里逐条写了是什么）；
+  `udevadm verify` 语法检查通过。只放行 `0001` 时看到的正是
+  `unable to connect. Maybe try 'sudo' or check your permissions`。装完重新插拔设备
+  （或 `sudo udevadm control --reload && sudo udevadm trigger`）。
+  装好后可以用规则引擎先确认它真的匹配到了（不需要设备节点权限）：
+  ```bash
+  udevadm test /sys/bus/usb/devices/<路径> | grep MODE
+  # 1-4: /usr/lib/udev/rules.d/50-udev-default.rules:74 MODE="0664": Set mode: 0664
+  # 1-4: /etc/udev/rules.d/60-pico-usb-display.rules:18 MODE="0666": Set mode: 0666
+  ```
+  第二行出现就说明规则生效（顺带说明：默认规则先给 `0664`，**靠这条才盖成 `0666`** ——
+  文件名前缀低于 `50-` 时连这行都不会有）。
 - BOOTSEL 下板子就是一块 **USB 大容量盘**：不想装 picotool 时，把 `build*/*.uf2` 拷进
   自动挂载的 `RPI-RP2`（或 `RP2350`）卷、等它卸载就烧完了 —— 和拖拽烧录是同一件事，
   实测 225 KB 约 1.3 s。`FLASH=none` 就是这个意思。
