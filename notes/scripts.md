@@ -75,6 +75,7 @@ python3 scripts/pud_usb.py      # 自检：对照 C 库参考向量校验编码�
 | `fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
 | `ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
 | `ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
+| `param_test.py` | 运行期参数通道测试（`SET_PARAM`/`GET_PARAM`）：调暗/调亮并读回，再验不被支持的字段被如实上报 | 无 |
 | `touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
 | `touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
 | `codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |

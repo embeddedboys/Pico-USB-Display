@@ -66,9 +66,14 @@ REQ_EP0_IN = 0x01
 REQ_EP1_OUT = 0x02
 REQ_EP2_IN = 0x03
 REQ_EP4_IN = 0x05
+#: Runtime parameters ride the control endpoint (protocol v2): a control OUT
+#: carrying a command header plus the values.  EP3 is still unused.
+REQ_SET_PARAM = 0x06
 
 CMD_GET_SN = 0x01
 CMD_GET_CAPS = 0x02
+CMD_SET_PARAM = 0x03
+CMD_GET_PARAM = 0x04
 
 #: Device capability report (``PUD_CMD_GET_CAPS``): magic, protocol version,
 #: the largest single EP1 transfer the device accepts, its active decoder and
@@ -85,6 +90,35 @@ CAPS_TOUCH = 0x0001
 CAPS_V1 = struct.Struct("<IIII")
 CAPS_V1_SIZE = CAPS_V1.size
 CAPS_STRUCT = struct.Struct("<IIIIHHHBBBBHHH")
+
+#: Runtime parameters (``PUD_CMD_SET_PARAM`` / ``PUD_CMD_GET_PARAM``).  A write
+#: carries a mask plus the values it wants; the answer reports the values in
+#: effect, the set this firmware can change at runtime, and which fields of the
+#: last write it could not apply (a rejected field does not fail the write).
+#: Kept in sync with ``struct pud_params`` / ``struct pud_param_state`` in the
+#: firmware's ``include/pud.h`` and the driver.
+PARAM_BRIGHTNESS = 0x00000001  #: u8, 0..100 percent
+PARAM_ROTATION = 0x00000002  #: 0..3, TFT_ROTATION numbering
+#: 0x00000004 is retired -- it was ``fps``, and the device does not pace frames
+#: at all (EP1 flow control makes the host wait).  The bit and the byte it used
+#: stay unused rather than being renumbered, so an implementation that already
+#: knows the number is not silently misread.
+PARAM_DECODER = 0x00000008  #: DECODER_TYPE numbering
+
+PARAMS_STRUCT = struct.Struct("<IBBBB")  # mask, brightness, rotation, reserved, decoder
+PARAM_STATE_STRUCT = struct.Struct("<IIBBBB")
+
+PARAM_NAMES = {
+    PARAM_BRIGHTNESS: "brightness",
+    PARAM_ROTATION: "rotation",
+    PARAM_DECODER: "decoder",
+}
+
+
+def param_names(mask):
+    """Render a PUD_PARAM_* mask as a readable list of field names."""
+    names = [name for bit, name in sorted(PARAM_NAMES.items()) if mask & bit]
+    return ",".join(names) if names else "-"
 
 #: Protocol version this host speaks.  v2 moved the rectangle and the payload
 #: length out of the REQ_EP1_OUT control request and into a header in front of
@@ -791,6 +825,40 @@ class Display:
                 1, (self.frame_max - EP1_HEADER_SIZE - 16) // 3)
         self.decoder_type = decoder_type
         return self.caps
+
+    def set_params(self, mask=0, brightness=0, rotation=0, decoder=0):
+        """Write runtime parameters (``PUD_CMD_SET_PARAM``).
+
+        Only the fields named in ``mask`` are touched.  The device does not
+        answer this write: a field it cannot apply comes back in ``rejected``
+        from :meth:`get_params`.  A malformed write (short payload, wrong
+        command) is stalled, which pyusb raises as a ``USBError``.
+        """
+        payload = PARAMS_STRUCT.pack(mask, brightness, rotation, 0, decoder)
+        self.dev.ctrl_transfer(
+            TYPE_VENDOR | EP_DIR_OUT, REQ_SET_PARAM, 0, 0,
+            struct.pack("<HH", CMD_SET_PARAM, len(payload)) + payload,
+            timeout=DEFAULT_TIMEOUT_MS)
+
+    def get_params(self, timeout=None):
+        """Read the runtime parameters in effect (``PUD_CMD_GET_PARAM``).
+
+        Returns ``settable``/``rejected`` masks plus the current values.
+        """
+        timeout = timeout or DEFAULT_TIMEOUT_MS
+        self.dev.ctrl_transfer(
+            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
+            struct.pack("<HH", CMD_GET_PARAM, PARAM_STATE_STRUCT.size))
+        raw = bytes(self.dev.read(EP2_IN_ADDR, PARAM_STATE_STRUCT.size,
+                                  timeout=timeout))
+        if len(raw) < PARAM_STATE_STRUCT.size:
+            raise PudError(
+                "PUD_CMD_GET_PARAM answered %d of %d bytes -- firmware without "
+                "runtime parameters?" % (len(raw), PARAM_STATE_STRUCT.size))
+        settable, rejected, brightness, rotation, _reserved, decoder = \
+            PARAM_STATE_STRUCT.unpack(raw)
+        return dict(settable=settable, rejected=rejected, brightness=brightness,
+                    rotation=rotation, decoder=decoder)
 
 
 # ---------------------------------------------------------------------------
