@@ -84,6 +84,24 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 6. 下结论前**两侧都要看**：主机 `dmesg`/`usbmon` 与设备侧计数器（gdb）对得上才算数。
 7. **一轮里不要既改代码又做真机验证**：先改完、编译过，再上板。
 
+## 烧写与测量纪律（2026-09 新增，血泪换的）
+
+1. **批量前先跑一个点**，逐项确认：①构建 ✓ ②**回读 flash 与构建产物比对** ✓ ③拿到日志/结果 ✓
+   ④状态行里的**实测频率 = 请求值** ✓。四项齐了再开循环 —— 曾整批死在烧写上白等半小时。
+2. **`openocd program ... verify` 可能报 "Verified OK" 却只写了一部分** ✗（实测：flash 从
+   0x800 起仍是 0xFF，板子还在跑旧镜像，看起来像新固件行为异常）。要么先
+   `flash erase_sector` 再写，要么用 picotool，并且**回读比对**才算数。
+3. **调试会话结束时核不能留在 halt** ✗：核停了，bootrom 的 USB 也不上线，板子会从 `lsusb`
+   整个消失，下一次烧写报 "no accessible RP-series devices"。会话必须以 `reset run`/`resume`
+   收尾（"读完要 `monitor resume`" 那条是同一回事，这里是它在 USB 上的后果）。
+4. **日志读取器要在烧写之前启动** ✓：否则抓到的是上一个应用的残留输出，读起来像是这次成功了。
+5. **过快的 flash 分频会写进 boot2**，于是每次复位都重演同一个失败 —— 实测官方 Pico 2 在
+   520 MHz 配 DIV 4（130 MHz flash）时核进 lockup，**软件复位救不回来，只能按 BOOTSEL**。
+   做分频实验时手边要够得着按键。
+6. **调试器是定位工具，别为了"纯 USB"丢掉它**：PC 直接说明状态（在函数里 = 在跑；
+   `isr_hardfault` = 真挂了；在 bootrom = 镜像没起来）。
+7. **工具输出不要静默**（`>/dev/null` 会把真正的错误一起吞掉 ✗），关键步骤把结果打出来。
+
 ## 架构不变量（动了就坏）
 
 1. **解码只能在 `decoder_task` 里做。** 在 `usbd_vendor_ep1_bulk_out()`
