@@ -154,15 +154,22 @@ CMake 还提供了 `flash` 目标（`CMakeLists.txt` 里按板子选 `target/rp2
   路径可以用 `PUD_GDB` / `PUD_PICOTOOL` / `PUD_OPENOCD` 覆盖。
 - `picotool` 这一路要求板子**已经在 BOOTSEL**：按住 BOOTSEL 插拔，或者用
   `./build.sh flash --reboot` 让脚本自己把它送进去（实测 2026-09-27，从应用态一路烧完）：
-  - 先试 picotool 自己的 `picotool reboot -f -u` —— **对本项目固件无效**：板子在跑应用时只会回
-    `No accessible RP-series devices in BOOTSEL mode were found.`，因为那需要设备端实现 picoboot
-    的复位接口（本固件没有）。
-  - 于是改走 bootrom（RP2040 + 接了 CMSIS-DAP 探针时）：调 ROM 函数 `UB` = `reset_usb_boot(0, 0)`。
-    它**在调用里就复位芯片**，所以 openocd 必定报
+  - 固件带 **picoboot 的 reset 接口**（配置描述符里的第 2 个接口，`0xFF/0x00/0x01`，见
+    [usb-protocol.md](usb-protocol.md)），所以 picotool 可以直接请**正在跑**的板子重启：
+    `picotool reboot --vid 0x2e8a --pid 0x0001 -f -u` → `The device was asked to reboot into
+    BOOTSEL mode.`，板子随即变成 `2e8a:0003`。两个坑：`--vid/--pid` **必须显式给**
+    （picotool 默认的设备过滤只认 bootrom 与 SDK CDC 的 PID，否则它在扫 reset 接口之前就报
+    `No accessible RP-series devices in BOOTSEL mode were found.`）；设备选择选项要写在命令
+    自己的选项**前面**（跟在 `-f -u` 后面会报 `unexpected option`）。
+  - 这条不通时（旧固件 / 没权限）退回调试器：调 RP2040 bootrom 的 `reset_usb_boot`
+    （ROM 函数 `UB`）。它**在调用里就复位芯片**，所以 openocd 必定报
     `Failed to call ROM function batch / ROM API call failed` —— 那是正常的，等 2 s
     `lsusb` 里就会出现 `2e8a:0003`。RP2350 没有这条（重启 API 是 `RB`，标志位没验证过）。
   ```bash
-  # openocd 的 rom_api_call 来自上游那个 "allow arbitrary ROM API call from Tcl" 补丁
+  # picotool 那条（reset 接口，脚本内部就是这么发的）
+  picotool reboot --vid 0x2e8a --pid 0x0001 -f -u
+  # 调试器退路（openocd 的 rom_api_call 来自上游那个
+  # "allow arbitrary ROM API call from Tcl" 补丁，0.12.0+dev 已有）
   openocd -f interface/cmsis-dap.cfg -c "adapter speed 10000" -f target/rp2040.cfg \
       -c "init" -c "targets rp2040.core0" -c "halt" -c "flash probe 0" \
       -c "rp2xxx rom_api_call UB 0 0" -c "shutdown"
@@ -224,6 +231,38 @@ Loading section .noncacheable, size 0x204fc lma 0x10015890
 ...
 Start address 0x1000014c, load size 220576
 ```
+
+### 为什么 `picotool` 必须带 `--vid/--pid`
+
+不是我们的问题，是 picotool 的设备过滤（`picotool v2.3.1`，与上游 master 同一份代码：
+`picoboot_connection/picoboot_connection.c` 的 `picoboot_open_device()`）：它在**打开设备之前**
+先按 PID 分桶，表里只有
+
+```
+0x0003 RP2040 USB boot   0x0004 picoprobe   0x0005 micropython
+0x0009 RP2350 SDK CDC    0x000a RP2040 SDK CDC   0x000f RP2350 USB boot
+```
+
+其它 PID 一律 `return dr_vidpid_unknown` —— 而"扫 reset 接口"的那段代码在这个 `switch`
+**之后**，所以 `2e8a:0001` 根本走不到它。实测（2026-09-27，板子在应用态）：
+
+| 写法 | 结果 |
+| --- | --- |
+| `picotool reboot -f -u` | ✗ `No accessible RP-series devices in BOOTSEL mode were found.` |
+| `picotool reboot --pid 0x0001 -f -u` | ✅ `The device was asked to reboot into BOOTSEL mode.` |
+| `picotool reboot --vid 0 -f -u` | ✅ 同上（`--vid 0` = 完全不过滤） |
+
+`scripts/flash.sh` 因此固定带上 `--vid 0x2e8a --pid 0x0001`（`PUD_VID`/`PUD_PID` 可覆盖）。
+
+**要让默认过滤也认（一次都不带参数），只有改 PID 一条路**：`0x000a`（RP2040）/`0x0009`
+（RP2350）是表里唯一会落进 `dr_vidpid_stdio_usb` 桶（`reboot -f` 用的就是那个桶）的取值。
+**2026-09-27 决定不改**，因为代价不小而收益只是省掉脚本内部的一个参数：
+
+- 驱动 `pud_ids[]`、`tools/pud_usb.py` 的 VID/PID、两个仓库的文档都要跟着改
+  （udev 规则反而不用：它已经放行了 `0009`/`000a`）；
+- 已有部署是破坏性的：新固件 + 老驱动不匹配（要留 `0x0001` 的旧条目兜底）；
+- 语义上顶着"Pico SDK CDC"的身份，`picotool`/`dmesg` 里和真 CDC 程序分不清，
+  同插两个时 `picotool -f` 只能靠 `--ser` 选。
 
 ## 配置项
 

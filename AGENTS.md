@@ -58,6 +58,10 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   `2e8a:000c`）+ 本机 openocd 0.12.0 → `./build.sh flash -m openocd` 直接 `Verified OK`；
   `FLASH=gdb` 配本机 openocd 起的 GDB server 同样能烧（本机没有 `gdb-multiarch`
   时用 `/usr/bin/gdb` 也行）。
+- **应用态不用按 BOOTSEL**：固件带 picoboot 的 reset 接口（描述符里第 2 个接口，
+  `0xFF/0x00/0x01`，见 [notes/usb-protocol.md](notes/usb-protocol.md)），
+  `./build.sh flash -m picotool --reboot` 会先请板子自己重启进 BOOTSEL 再烧
+  （实测 2026-09-27，不需要调试器）。
 - **只读检查固件状态时，读完要 `monitor resume`**；别用 `monitor reset run`
   （会清掉计数器和显示状态）。卡死时复位才用它。
 - 细节见 [`notes/build-and-flash.md`](notes/build-and-flash.md) 与

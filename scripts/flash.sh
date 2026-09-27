@@ -9,7 +9,8 @@
 #   ./build.sh flash -n               print the command, run nothing
 #   ./build.sh flash -t <target>      override the GDB server / probe port
 #   ./build.sh flash --reboot         picotool: put a running board into BOOTSEL
-#                                     first (through a CMSIS-DAP probe, RP2040)
+#                                     first (through the firmware's reset
+#                                     interface; a CMSIS-DAP probe as fallback)
 #
 # Methods (lunch writes one of these into FLASH=):
 #   picotool    board in BOOTSEL mode, over USB, on this machine
@@ -21,7 +22,8 @@
 # The command lines are the ones in notes/build-and-flash.md; that file records
 # which of them have actually been run against a board and which have not.
 #
-# Env: PUD_GDB, PUD_PICOTOOL, PUD_OPENOCD, PUD_GDB_TARGET, PUD_BMP_PORT.
+# Env: PUD_GDB, PUD_PICOTOOL, PUD_OPENOCD, PUD_GDB_TARGET, PUD_BMP_PORT,
+#      PUD_VID / PUD_PID (default 0x2e8a / 0x0001, the firmware's own IDs).
 
 set -euo pipefail
 
@@ -39,6 +41,12 @@ method=$(state_get FLASH || true)
 target=
 dry=0
 reboot=0
+
+# The firmware's IDs, for the picotool calls that have to name the device:
+# picotool's default device filter only knows the bootrom and the SDK's CDC PIDs
+# (see reboot_to_bootsel below).
+PUD_VID=${PUD_VID:-0x2e8a}
+PUD_PID=${PUD_PID:-0x0001}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,19 +130,29 @@ wait_for_bootsel() {
 
 # Put the board into BOOTSEL without touching the button (picotool --reboot).
 #
-# picotool's own --force needs the running firmware to expose picoboot's reset
-# interface, which this firmware does not -- the board only ever answers
-# "No accessible RP-series devices in BOOTSEL mode were found.".  So the way in
-# is a CMSIS-DAP probe: the RP2040 bootrom's reset_usb_boot (ROM function "UB")
-# does the job from there.  That call resets the chip inside itself, so openocd
-# reports a failed ROM call even though the board ends up in BOOTSEL -- hence the
-# polling below rather than an exit status.
+# The firmware exposes picoboot's reset interface (0xff/0x00/0x01, see
+# usbd_vendor.h), so picotool can ask a *running* board to reboot: that is the
+# first attempt, and it needs no debugger at all.  The --vid/--pid have to be
+# spelled out: picotool's device filter knows only the bootrom PIDs and the SDK's
+# CDC ones, so with its default filter it gives up ("No accessible RP-series
+# devices in BOOTSEL mode were found") before it ever looks for a reset
+# interface.  Note the option order -- picotool rejects device-selection options
+# that come after the command's own flags.
+#
+# If that fails (no reset interface, old firmware, no permissions), fall back to
+# a CMSIS-DAP probe: the RP2040 bootrom's reset_usb_boot (ROM function "UB") does
+# the same.  That call resets the chip inside itself, so openocd reports a failed
+# ROM call even though the board ends up in BOOTSEL -- hence the polling below
+# rather than an exit status.
 reboot_to_bootsel() {
-    "$PICOTOOL" reboot -f -u >/dev/null 2>&1 && wait_for_bootsel && return 0
+    if "$PICOTOOL" reboot --vid "$PUD_VID" --pid "$PUD_PID" -f -u >/dev/null 2>&1 &&
+        wait_for_bootsel; then
+        return 0
+    fi
     if [ "$tcfg" != rp2040 ] || ! command -v "${PUD_OPENOCD:-openocd}" >/dev/null 2>&1; then
-        die "the board is not in BOOTSEL: this firmware cannot be reset into it
-  (no picoboot reset interface), so hold BOOTSEL while plugging the board in, or
-  attach a CMSIS-DAP probe to use the bootrom route"
+        die "the board is not in BOOTSEL and did not accept a reboot request
+  (no picoboot reset interface in the running firmware?): hold BOOTSEL while
+  plugging it in, or attach a CMSIS-DAP probe to use the bootrom route"
     fi
     printf 'flash: asking the bootrom for BOOTSEL through the probe\n'
     "${PUD_OPENOCD:-openocd}" -f interface/cmsis-dap.cfg -c "adapter speed 10000" \

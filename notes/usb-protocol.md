@@ -17,9 +17,44 @@
 `EP3` 在 `usbd_vendor.h` 里有定义（`REQ_EP3_OUT` / `EP3_OUT_ADDR`），
 但**没有写进配置描述符**，主机看不到它。
 
+## picoboot 复位接口（第二个接口，跟图像协议无关）
+
+配置描述符有**两个接口**（`bNumInterfaces = 2`）：
+
+| 接口 | 类/子类/协议 | 端点 | 作用 |
+| --- | --- | --- | --- |
+| 0 | `0xFF / 0x00 / 0x00` | EP1 OUT、EP2 IN、EP4 IN | 图像 / 查询 / 触摸，就是这份文档讲的协议 |
+| 1 | `0xFF / 0x00 / 0x01` | 无 | **picoboot 的 reset 接口**：主机请设备重启 |
+
+接口 1 的类码是 Raspberry Pi 的约定，不是我们定的 —— SDK 的 `pico_stdio_usb` 用的就是
+同一个（`src/common/pico_usb_reset_interface_headers/include/pico/usb_reset_interface.h`，
+`RESET_INTERFACE_SUBCLASS 0x00` / `RESET_INTERFACE_PROTOCOL 0x01`）：
+
+- `bmRequestType = 0x21`（class 型、接口收方）、`bRequest = 0x01`（`RESET_REQUEST_BOOTSEL`）、
+  `wValue` 低 7 位 = 要排除在 BOOTSEL 之外的接口掩码 → `reset_usb_boot(0, wValue & 0x7f)`，
+  **不返回**（芯片在调用里就复位了，主机看到的是设备消失）；
+- `bRequest = 0x02`（`RESET_REQUEST_FLASH`）→ `watchdog_reboot()`，只重启回应用。
+
+有了它，`picotool` 能在**应用态**把板子直接送进 BOOTSEL（`./build.sh flash -m picotool
+--reboot`，2026-09-27 实测：应用态 → BOOTSEL → 烧写 → 回应用，全程不用按钮、不用调试器）。
+两个坑：picotool 默认的设备过滤只认 bootrom 与 SDK CDC 的 PID，**必须显式给
+`--vid 0x2e8a --pid 0x0001`**（脚本已带上，否则它在扫 reset 接口之前就放弃了）；设备选择
+选项还要写在命令自己的选项**前面**（`picotool reboot --vid … --pid … -f -u`）。
+
+它不是 PUD 协议的一部分，但它**不是透明的**：接口 0 的类码、端点、请求全没动，`tools/` 里
+那些 pyusb 脚本按设备找、按端点地址收发，完全不受影响；**内核驱动则要显式躲开它** ——
+`pud_ids[]` 原本是设备级的 `USB_DEVICE(0x2E8A, 0x0001)`，USB 核会为每个匹配到的接口各调一次
+`probe()`，而驱动用的是写死的端点地址（`EP1_OUT_ADDR` 等），拿错接口不会报错，只会再注册一个
+显示设备。驱动仓现在用 `USB_DEVICE_AND_INTERFACE_INFO(...)` 只匹配图像接口，并在 `pud_probe()`
+入口再挡一道（见驱动仓 `notes/usb-protocol.md` 的枚举表）。
+
+> 实测面：上面两条请求都在 **RP2040** 板上跑过（第二个接口与 `reset_usb_boot` 走的就是
+> SDK 的实现）。**RP2350 只编过、没在真机验证**（手头只有 RP2040 板）—— 它走的是 SDK 里
+> `reset_usb_boot()` 的另一条实现（`rom_reboot`），两者接口一致，但没实测。
+
 ## 请求分发
 
-所有厂商请求都在 `vendor_request_handler()` 里分发（`src/cherryusb/usbd_vendor.c`）：
+厂商请求都在 `vendor_request_handler()` 里分发（`src/cherryusb/usbd_vendor.c`）：
 
 ```c
 switch (setup->bRequest) {
@@ -29,6 +64,10 @@ case REQ_EP4_IN:    /* 触摸 */
 default:            return -1;   /* 含已废弃的 REQ_EP1_OUT，见下 */
 }
 ```
+
+接口 1 的请求**不在这里**：picotool 发的是 class 型请求，CherryUSB 按 `wIndex` 把它交给
+那个接口的 `class_interface_handler`（`usbd_core.c` 的 `usbd_class_request_handler()`），
+所以 reset 接口有自己的一份 `reset_request_handler()`（`usbd_reset_init_intf()` 注册）。
 
 `REQ_EP1_OUT`（0x02）**在协议 v2 里被删掉了**：矩形随 EP1 的数据一起走。老主机发它
 会拿到 EP0 stall —— 这是**故意**的，静默按旧格式解析它的数据只会更糟。

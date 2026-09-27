@@ -575,6 +575,10 @@ struct usbd_endpoint vendor_in_ep4 = {
 };
 
 struct usbd_interface intf0;
+/* the picoboot reset interface: no endpoints, EP0 requests only.  It is added
+ * second so that usbd_add_interface() numbers it RESET_INTF_NUM (1), which is
+ * the number its descriptor carries. */
+struct usbd_interface intf1;
 
 void usb_device_init()
 {
@@ -585,6 +589,7 @@ void usb_device_init()
 	usbd_desc_register(0, &xxx_vendor_descriptor);
 
 	usbd_add_interface(0, usbd_vendor_init_intf(0, &intf0));
+	usbd_add_interface(0, usbd_reset_init_intf(0, &intf1));
 
 	usbd_add_endpoint(0, &vendor_out_ep1);
 	usbd_add_endpoint(0, &vendor_in_ep2);

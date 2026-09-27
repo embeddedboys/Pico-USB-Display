@@ -84,8 +84,30 @@ static const uint8_t device_descriptor[] = {
 	                           1),
 };
 
+/* picoboot's reset interface -- the one interface this firmware has that is not
+ * about the display.  While the application is running it is how a host asks the
+ * board to reboot into BOOTSEL mode without anybody holding the BOOTSEL button:
+ * picotool scans the config descriptor for a vendor-class interface with
+ * subclass 0 and protocol 1, then sends RESET_REQUEST_BOOTSEL over EP0.  The
+ * SDK's pico_stdio_usb exposes exactly this (pico/usb_reset_interface.h); it is
+ * a *vendor* interface, so it does not conflict with EP1/EP2/EP4 -- it has no
+ * endpoints at all, and a host that does not care about it (the DRM driver, the
+ * tools in tools/) simply ignores it.
+ *
+ * It is a second interface rather than a flag on the image interface so that
+ * nothing about the picture protocol changes; the driver matches the device by
+ * VID/PID and never looks at the class codes of an interface it does not use. */
+#define RESET_INTF_NUM 1
+#define RESET_INTERFACE_SUBCLASS 0x00
+#define RESET_INTERFACE_PROTOCOL 0x01
+#define RESET_REQUEST_BOOTSEL 0x01
+#define RESET_REQUEST_FLASH 0x02
+/* RESET_REQUEST_FLASH arms the watchdog for this many ms: long enough for the
+ * EP0 transfer to finish, short enough that the host does not time out. */
+#define RESET_TO_FLASH_DELAY_MS 100
+
 static const uint8_t config_descriptor[] = {
-	USB_CONFIG_DESCRIPTOR_INIT(9 + 9 + 7 + 7 + 7, 1, 0x01,
+	USB_CONFIG_DESCRIPTOR_INIT(9 + 9 + 7 + 7 + 7 + 9, 2, 0x01,
 	                           USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
 	USB_INTERFACE_DESCRIPTOR_INIT(0, 0, 3, 0xFF, 0, 0, 0),
 	USB_ENDPOINT_DESCRIPTOR_INIT(EP1_OUT_ADDR, USB_ENDPOINT_TYPE_BULK,
@@ -93,7 +115,10 @@ static const uint8_t config_descriptor[] = {
 	USB_ENDPOINT_DESCRIPTOR_INIT(EP2_IN_ADDR, USB_ENDPOINT_TYPE_BULK,
 	                             USB_BULK_EP_MPS_FS, 0),
 	USB_ENDPOINT_DESCRIPTOR_INIT(EP4_IN_ADDR, USB_ENDPOINT_TYPE_INTERRUPT,
-	                             64, EP4_POLL_INTERVAL_MS)
+	                             64, EP4_POLL_INTERVAL_MS),
+	USB_INTERFACE_DESCRIPTOR_INIT(RESET_INTF_NUM, 0, 0, 0xFF,
+	                              RESET_INTERFACE_SUBCLASS,
+	                              RESET_INTERFACE_PROTOCOL, 0)
 };
 
 static const uint8_t device_quality_descriptor[] = {
@@ -118,6 +143,9 @@ extern const struct usb_descriptor xxx_vendor_descriptor;
 
 struct usbd_interface *usbd_vendor_init_intf(uint8_t busid,
                                              struct usbd_interface *intf);
+/* the picoboot reset interface, RESET_INTF_NUM (see the descriptor above) */
+struct usbd_interface *usbd_reset_init_intf(uint8_t busid,
+                                            struct usbd_interface *intf);
 /* usbd_vendor_ep2_bulk_in_fsm() is declared in usb.h, next to its definition
  * in usb.c -- it used to be declared here as well, and the two copies drifted
  * apart when its return type changed. */

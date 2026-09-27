@@ -6,6 +6,10 @@
 
 #include "decoder.h"
 
+/* the reset interface: reset_usb_boot() (bootrom) and watchdog_reboot() */
+#include "hardware/watchdog.h"
+#include "pico/bootrom.h"
+
 static const u8 *device_descriptor_callback(u8 speed)
 {
 	return device_descriptor;
@@ -134,6 +138,59 @@ struct usbd_interface *usbd_vendor_init_intf(u8 busid,
 	intf->class_endpoint_handler = NULL;
 	intf->vendor_handler = vendor_request_handler;
 	intf->notify_handler = vendor_notify_handler;
+
+	return intf;
+}
+
+/* picoboot's reset interface (see the descriptor comment in usbd_vendor.h).
+ * picotool sends a *class* request addressed to the interface (bmRequestType
+ * 0x21), which CherryUSB dispatches to the class_interface_handler of the
+ * interface whose number is in wIndex -- hence a handler of its own here rather
+ * than one more case in the vendor handler above (that one only ever sees
+ * vendor-type requests).
+ *
+ * Both requests end in a chip reset, so neither returns: the EP0 status stage is
+ * never reached and the host sees the device disappear instead, which is what
+ * picotool expects (it then waits for the device to re-enumerate).
+ *
+ * This runs in the USB interrupt and is safe there: reset_usb_boot() is a store
+ * into the watchdog scratch register plus a watchdog trigger, with no bus access
+ * to wait for -- the reasoning behind AGENTS.md invariant 11. */
+static int reset_request_handler(uint8_t busid, struct usb_setup_packet *setup,
+                                 uint8_t **data, uint32_t *len)
+{
+	(void)busid;
+	(void)data;
+	(void)len;
+
+	switch (setup->bRequest) {
+	case RESET_REQUEST_BOOTSEL:
+		/* wValue bits 0-6 are the set of interfaces to leave out of
+		 * BOOTSEL mode; picotool also puts its optional --bootsel-led
+		 * bits in wValue (bit 8 "pin specified", bits 9+ the pin), which
+		 * this board has no use for and ignores. */
+		reset_usb_boot(0, setup->wValue & 0x7f);
+		break;
+	case RESET_REQUEST_FLASH:
+		/* "reboot back into the application": the same reset, without the
+		 * bootrom's BOOTSEL detour */
+		watchdog_reboot(0, 0, RESET_TO_FLASH_DELAY_MS);
+		break;
+	default:
+		return -1;
+	}
+
+	return 0;
+}
+
+struct usbd_interface *usbd_reset_init_intf(u8 busid, struct usbd_interface *intf)
+{
+	(void)busid;
+
+	intf->class_interface_handler = reset_request_handler;
+	intf->class_endpoint_handler = NULL;
+	intf->vendor_handler = NULL;
+	intf->notify_handler = NULL;
 
 	return intf;
 }
