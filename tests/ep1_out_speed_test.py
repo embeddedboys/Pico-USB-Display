@@ -71,7 +71,10 @@ def main():
                 # Encode once, outside the timed loop: this probe is about the
                 # link, and host-side QOI encoding would otherwise dominate the
                 # number it reports.
-                rows = max(1, pud_usb.PUD_MAX_BAND_PIXELS // args.xres)
+                # Band by what the device accepts, not by the module default:
+                # an RP2040 firmware takes half the pixels per transfer, and a
+                # band built for the RP2350 numbers is one the device drops.
+                rows = max(1, disp.band_pixels // args.xres)
                 rects = [(0, y, args.xres - 1, min(y + rows - 1, h - 1))
                          for y in range(0, h, rows)]
                 payloads = []

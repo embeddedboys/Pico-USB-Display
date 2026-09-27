@@ -60,11 +60,17 @@ import pud_usb
 XRES = 480
 YRES = 320
 
+#: Band size and firmware frame slot.  These default to the RP2350 firmware's
+#: numbers and are replaced by what the device reports (PUD_CMD_GET_CAPS) as soon
+#: as it is claimed -- see device_limits().  An RP2040 firmware has half the SRAM:
+#: it accepts 32 KB transfers and bands by half as many pixels, so building the
+#: default case sizes against it produces transfers it drops on the floor.
 BAND_PIXELS = pud_usb.PUD_MAX_BAND_PIXELS
-TRANS_MAX = pud_usb.USB_TRANS_MAX_SIZE
-
-#: Firmware frame slot: anything larger must be banded.
 FRAME_SLOT = 65536
+
+#: Largest single transfer the host side will ever submit (protocol limit, not the
+#: frame slot): used by the dry run to say when a case cannot be unbanded at all.
+TRANS_MAX = pud_usb.USB_TRANS_MAX_SIZE
 
 #: Distinct frames pre-encoded per case, cycled through the timing loop.
 POOL = 3
@@ -140,6 +146,20 @@ def pattern_rgb565(name, i, image_path):
 # Case construction
 # ---------------------------------------------------------------------------
 
+def device_limits():
+    """(band_pixels, frame_max) as reported by the device.
+
+    Claiming the panel here and releasing it again is what lets the cases above be
+    sized for the firmware that is actually running (an RP2040 build bands by half
+    as many pixels and takes half the transfer size of an RP2350 one).
+    """
+    try:
+        with pud_usb.open_device() as disp:
+            return disp.band_pixels, disp.frame_max
+    except pud_usb.PudError as exc:
+        sys.exit(str(exc))
+
+
 def band_rects(xs, ys, xe, ye):
     """Split like the driver's pud_fb_dirty() does: by pixel count."""
     rows = max(1, BAND_PIXELS // (xe - xs + 1))
@@ -170,7 +190,10 @@ def build_full_case(pattern, image_path):
                        band_rects(0, 0, XRES - 1, YRES - 1)])
         whole.append([(0, 0, XRES - 1, YRES - 1, pud_usb.qoi_encode(px))])
 
-    single = whole if all(len(f[0][4]) <= TRANS_MAX for f in whole) else None
+    # Only when a whole frame fits ONE transfer the device accepts: the payload
+    # has to stay inside the frame slot, leaving room for the EP1 header.
+    room = FRAME_SLOT - pud_usb.EP1_HEADER_SIZE
+    single = whole if all(len(f[0][4]) <= room for f in whole) else None
     return banded, single
 
 
@@ -292,6 +315,12 @@ def main():
 
     if args.image and not os.path.isfile(args.image):
         sys.exit("--image %s: no such file" % args.image)
+
+    # The band size and the frame slot come from the device, because the defaults
+    # are the RP2350 ones.  A dry run does not touch the device, so it keeps them.
+    if not args.dry_run:
+        global BAND_PIXELS, FRAME_SLOT
+        BAND_PIXELS, FRAME_SLOT = device_limits()
 
     # Build every case up front: the timing loop must not include encoding,
     # so all payloads are prepared before any of them is sent.
