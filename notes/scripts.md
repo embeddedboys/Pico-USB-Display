@@ -343,10 +343,10 @@ numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0
 | `pud_usb.open_device()`（读 caps） | `proto 2 / frame_max 65536 / decoder 3 / band_pixels 21835`；面板 `480x320 rotation 1 16bpp 50000kHz touch poll 10ms 70x40mm touch True` —— 与固件/驱动文档**逐字段一致** |
 | `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg`（当时那张） | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
 | 同上，换成现在的开机图 `assets/bootlogo.png` | `sent 8 bands, 13074 B in 26.8 ms` —— **载荷与时间仍只有原来的一半** |
-| `ep1_out_speed_test.py` | 8~320 行的每个尺寸都是 **~0.816 MB/s** 一条平线 |
+| `ep1_out_speed_test.py` | 8~320 行的每个尺寸都是 **~0.816 MB/s** 一条平线（**经 hub**；直插根口是 1.13 MB/s，见下） |
 | `fps_bench.py --full --frames 20` | photo **6.19 fps**、noise **1.83 fps**，判定都是 `USB 受限` |
 | `video_player.py --xres 480 --yres 320 --fps 15 --no-loop test.mp4` | `75 frames in 5.1 s -> 14.6 fps, 0.37 MB/s`（目标 15 fps，基本实时；片源是 `ffmpeg -f lavfi -i testsrc=size=480x320:rate=15 -t 5 …` 造的） |
-| `desktop_codecs.py --device --codec qoi --frames 20` | 全屏 93893 B → **117.63 ms**；八个区域的带宽都是 **~0.80 MB/s** |
+| `desktop_codecs.py --device --codec qoi --frames 20` | 全屏 93893 B → **117.63 ms**；八个区域的带宽都是 **~0.80 MB/s**（经 hub；根口 86.00 ms） |
 | `codec_compare.py --codec qoi --frames 20` | solid 265.4 fps / gradient 24.2 / photo 6.1 / noise 1.8 —— 与 `fps_bench` 的同一批数字**一致** |
 | `xorg_desktop_share.py --frames 30 --stats` | `30 frames in 5.7 s -> 5.2 fps, 0.06 MB/s`；日志里**只发脏矩形**（`last 6x6 at 223,14`、`239x274 at 0,23` …） |
 | `touch_draw.py --seconds 5`（无人触摸） | 画布推上去 `2610 B / 13.5 ms`，0 报告、`rc=0` —— **空闲场景处理正确**（与 `touch_test.py` 相反） |
@@ -362,12 +362,27 @@ numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0
   判据应该用 caps 的 `touch` 位（或先 poll 一次）来区分"没人碰"和"没实现"；现在空闲场景下
   的文案和 exit 1 是**假阴性**。另外 `--mode poll` 每条报告后固定 200 ms 的间隔是脚本自己的
   `sleep(idle_timeout)`，不是设备节奏。
-- **吞吐 0.816 MB/s 比在 RK3588 开发机上量到的 1.13 MB/s 低约 28%** —— 这是**主机/拓扑差异**，
-  不是设备性能：本机（x86）的 USB 拓扑里 Pico 挂在**一级 480M hub 下面**
-  （`lsusb -t`：`3-1 → Port 3 → Dev 071`，设备本身是 12M 全速），也就是全速设备要经
-  hub 的 **TT**；上一台机器是直连。本仓此前已确认这类差值出在总线/主机侧
-  （见 [pitfalls.md](pitfalls.md) 的双缓冲一节），这里也没有设备侧的异常迹象 ——
-  但**没有做"直连 vs 经 hub"的 A/B**，所以 TT 只是最合理的解释，未验证。
-  另一条独立佐证：同一份"桌面式全屏"内容（**93893 B**）在 LVGL 模板 README 里记的是
-  **89 ms ≈ 1.05 MB/s**（RK3588 上量的），本机 `desktop_codecs.py --device --codec qoi`
-  跑同一份是 **117.63 ms（0.80 MB/s）**。
+- **吞吐 0.816 MB/s 比在 RK3588 开发机上量到的 1.13 MB/s 低约 28%** —— 这是**拓扑差异**
+  （Pico 经 480M hub 的 TT），不是设备性能。2026-09-30 做了直连 vs 经 hub 的 A/B，
+  **已证实**，见下一节。
+
+### 全速设备别挂在 hub 后面（2026-09-30 A/B 实测）
+
+同一台 x86 开发机、同一块板子、同一份固件（`DECODER_TYPE=3`，225 MHz），只换插口：
+
+| 插法（sysfs 路径） | `ep1_out_speed_test.py` 11 KB / 88 KB / 444 KB | 桌面整屏 93893 B（`desktop_codecs.py --device`） |
+| --- | --- | --- |
+| 经 480M hub（`3-2.2`，Realtek `0bda:5420`，走 TT） | 0.817 / 0.833 / 0.833 MB/s | 117.63 ms（2026-09-26 那轮） |
+| **直插 xHCI 根口**（`3-6`） | **1.110 / 1.130 / 1.132 MB/s** | **86.00 ms**（1.09 MB/s） |
+
+- **+36% 吞吐（0.833 → 1.132 MB/s），全部来自拓扑**；根口的数字 = RK3588 直连 = 全速理论
+  上限 1.216 MB/s 的 93%。两种插法下设备侧都干净（`submitted == drawn`、`dropped`/`bad`/
+  `oversize`/`stale` = 0、`CFSR`/`HFSR` = 0），所以损失在 hub 的 TT 调度里，不在设备。
+- **量吞吐前先看拓扑**：`/sys/bus/usb/devices/<路径>/speed` 是 `12`（设备本身全速），关键是
+  路径里有没有 `.`（`3-2.2` = 经 hub、`3-6` = 根口），或 `lsusb -t` 里它上面是不是一个
+  `Class=Hub`。拿经 hub 的数字和别人直连的比，会把 28% 的拓扑差当成设备问题。
+- 根口下各区域（20 帧中位，编码在计时外）：面板条 2122 B 2.06 ms、文本行 2010 B 1.96 ms、
+  终端窗体 18124 B 17.00 ms、壁纸条 19252 B 17.64 ms、整屏 86.00 ms —— 带宽 1.03~1.11 MB/s，
+  仍然**贴着链路**，要再快只能少发字节。
+- `img_viewer.py` 打印的 MB/s（根口下 0.64~0.81）**不是链路速度**：它的计时里含 Python 侧的
+  图片加载与 QOI 编码。
