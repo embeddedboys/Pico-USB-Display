@@ -353,15 +353,29 @@ def qoi_encode(pixels):
     return bytes(out)
 
 
-def qoiz_encode(pixels, level=1):
+def qoiz_encode(pixels, level=6):
     """QOI, then raw deflate (RFC 1951, no zlib header) over the QOI stream.
 
     The device (DECODER_TYPE 5) inflates the transfer and QOI-decodes the result,
-    so the inner stream is exactly what `qoi_encode` produces.  Level 1 is the
-    default because it already gets nearly all of the gain on desktop content
-    (measured: 29.6% vs 31.1% at level 6, see notes/decoders.md) and it is what a
-    kernel driver would pick for latency.  zlib is the same deflate the kernel
-    has built in (lib/zlib_deflate), so no encoder has to be vendored for it.
+    so the inner stream is exactly what `qoi_encode` produces.
+
+    Level 6 is the default because the level is most of the gain: on the
+    synthetic desktop, banded the way an RP2350 asks for, level 1 takes 11.2% off
+    the QOI bytes and level 6 takes 26.6% (level 9: 28.2%).  With the frame on
+    the link's limit that is the frame time too -- measured end to end, full
+    480x320 screen, one instrument for every row (notes/decoders.md):
+
+      QOI                93893 B   101.06 ms
+      QOI+deflate L1     83361 B    92.50 ms   -8.5%
+      QOI+deflate L6     68874 B    77.99 ms   -22.8%
+      QOI+deflate L6, 3 frame slots   73.65 ms -27.1%  (= the link, no decoder)
+
+    The cost of the higher level is on the host: encoding a full frame is about
+    10 ms at level 1 and 40-55 ms at level 6.  A kernel driver that must encode
+    inside a frame deadline should weigh that, and a level-1 stream is still
+    decodable by the same device -- the level is not a protocol field.  zlib is
+    the same deflate the kernel has built in (lib/zlib_deflate), so no encoder
+    has to be vendored for it.
     """
     import zlib
 
