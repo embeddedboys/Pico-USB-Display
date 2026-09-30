@@ -69,6 +69,22 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
 > 走断点调试（`monitor reset halt` → 断点 → `continue`）之后再 `reset run`，
 > 最容易踩到这个；最稳的是直接重烧一次。
 
+**另一种样子：`lsusb` 里还在，但每个请求都 `EIO`**（2026-09-30，直插 xHCI 根口）。
+`openocd ... program ... reset run` 烧完，`lsusb` 照常列出 `2e8a:0001`，可 pyusb 的
+`GET_CAPS` 控制请求报 `[Errno 5] Input/Output Error`，openocd 也打出
+`could not read product string ... Input/Output Error`。设备侧读到的是：
+`s_configured = 0`、`s_ep1` 全 0、`ADDR_ENDP = 0`（地址被复位清掉了）、`SIE_CTRL` 上拉开着、
+两个核都在 idle 任务里、`CFSR`/`HFSR` = 0 —— 固件好好的，只是**没被重新枚举**：复位太快，
+主机没看到断开，还拿旧地址跟它说话（`dmesg` 里也没有新的 `new full-speed USB device`）。
+上面的"halt 住停 2 秒再 `reset run`"这次**没用**；**从主机侧复位端口**立刻恢复
+（`dmesg`：`reset full-speed USB device number 68`，随后 caps 正常）：
+
+```bash
+.venv/bin/python -c 'import usb.core; usb.core.find(idVendor=0x2e8a, idProduct=0x0001).reset()'
+```
+
+烧完就跑一次这条，再开始测；否则第一步就会看起来像"新固件把 USB 弄坏了"。
+
 ### halt/resume 的坑：两个核是一个 SMP 组（2026-09 实测）
 
 openocd 0.12 的 `rp2350.cfg` 把 `rp2350.cm0` / `rp2350.cm1` 当成**一个 SMP 组**：`resume`
