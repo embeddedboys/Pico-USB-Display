@@ -131,9 +131,12 @@ add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 #  2  |  lz4     |  lz4    |
 #  3  |  qoi     |  qoi    |
 #  4  |  rle     |  rle    |
+#  5  |  qoiz    |  qoi + raw deflate (experimental, notes/decoders.md) |
 # The numbers are a protocol field: the device reports the selected decoder
-# through PUD_CMD_GET_CAPS, so do not renumber them.
-set(DECODER_TYPE 3)
+# through PUD_CMD_GET_CAPS, so do not renumber them.  3 is what the driver
+# speaks; a different one for an experiment:
+#   cmake .. -DDECODER_TYPE=5
+set(DECODER_TYPE 3 CACHE STRING "decoder the firmware is built for (protocol field)")
 
 # Decode / display-path timing counters (g_qoi_stat_* in src/decoders/decoder.c).
 # Cost is two time_us_32() reads per flush batch, so it is off by default;
@@ -201,6 +204,7 @@ target_link_libraries(${PROJECT_NAME}
     lz4
     qoi
     rle
+    miniz
     FreeRTOS-Kernel-Heap3
 )
 

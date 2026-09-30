@@ -35,6 +35,10 @@
 /* RGB565 RLE, the codec from the rgb565-rle library (see src/decoders/rle/).
  * Added after QOI, so it takes the next free number. */
 #define DECODER_USE_RLE 4
+/* QOI, then raw deflate (RFC 1951) over the QOI stream.  The device inflates the
+ * transfer (tinfl, src/decoders/miniz/) and hands the result to the QOI decoder.
+ * Experimental; see notes/decoders.md. */
+#define DECODER_USE_QOIZ 5
 
 #ifndef DECODER_TYPE
 #define DECODER_TYPE DECODER_USE_JPEGDEC
@@ -54,6 +58,8 @@ extern void qoi_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoi_data,
                         u32 qoi_size);
 extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data,
                         u32 rle_size);
+extern void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data,
+                         u32 qoiz_size);
 
 extern void decoder_init(void);
 extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
@@ -72,6 +78,8 @@ extern bool decoder_slot_free(void);
 #define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_RLE
 #define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
+#elif DECODER_TYPE == DECODER_USE_QOIZ
+#define decoder_drawimg(xs, ys, xe, ye, b, l) qoiz_drawimg(xs, ys, xe, ye, b, l)
 #else
 #error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */

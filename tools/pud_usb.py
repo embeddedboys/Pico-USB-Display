@@ -353,23 +353,42 @@ def qoi_encode(pixels):
     return bytes(out)
 
 
+def qoiz_encode(pixels, level=1):
+    """QOI, then raw deflate (RFC 1951, no zlib header) over the QOI stream.
+
+    The device (DECODER_TYPE 5) inflates the transfer and QOI-decodes the result,
+    so the inner stream is exactly what `qoi_encode` produces.  Level 1 is the
+    default because it already gets nearly all of the gain on desktop content
+    (measured: 29.6% vs 31.1% at level 6, see notes/decoders.md) and it is what a
+    kernel driver would pick for latency.  zlib is the same deflate the kernel
+    has built in (lib/zlib_deflate), so no encoder has to be vendored for it.
+    """
+    import zlib
+
+    comp = zlib.compressobj(level, zlib.DEFLATED, -15)
+    return comp.compress(qoi_encode(pixels)) + comp.flush()
+
+
 #: The encoders a host may send with.  The device has to be built for the same
 #: one (DECODER_TYPE); `Display.query_caps()` asks which.
 ENCODERS = {
     "qoi": qoi_encode,
     "rle": rle_encode,
     "lz4": lz4_encode,
+    "qoiz": qoiz_encode,
 }
 
 #: The DECODER_TYPE each of those needs on the device -- a protocol field
 #: (`PUD_CMD_GET_CAPS` reports the device's own, see notes/usb-protocol.md).
 #: 0 is tjpgd, 1 is JPEGDEC (both JPEG, the host only ever sends whole frames);
-#: 3 QOI and 4 RLE are the default paths, 2 is LZ4 (banded, see lz4_encode).
+#: 3 QOI and 4 RLE are the default paths, 2 is LZ4 (banded, see lz4_encode),
+#: 5 is QOI + deflate (experimental, see qoiz_encode).
 DECODER_TYPES = {
     "jpeg": 1,
     "lz4": 2,
     "qoi": 3,
     "rle": 4,
+    "qoiz": 5,  # experimental: QOI + raw deflate
 }
 
 
@@ -906,6 +925,10 @@ def _selftest():
                 struct.pack("<8H", *_REFERENCE_PIXELS):
             raise PudError("LZ4 encoder does not round trip")
         print("  LZ4 encoder round trips (liblz4, via the lz4 package)")
+    import zlib
+    if zlib.decompress(qoiz_encode(_REFERENCE_PIXELS), -15) != _REFERENCE_STREAM:
+        raise PudError("QOI+deflate encoder does not round trip to the QOI stream")
+    print("  QOI+deflate encoder round trips to the QOI reference stream")
     print("  band limit %d pixels, %d bytes per transfer"
           % (PUD_MAX_BAND_PIXELS, USB_TRANS_MAX_SIZE))
     try:

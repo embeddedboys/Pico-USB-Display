@@ -11,6 +11,75 @@
 | 2 | LZ4 | LZ4 | 可用；**每个传输一个 band**（block 不能分块解码，见下） |
 | 3 | **QOI** | RGB565 QOI | **当前使用**（全屏比两种 JPEG 快 12~20 倍） |
 | 4 | RLE | RGB565 RLE | 可用；高熵内容比 QOI 小，结构化内容比 QOI 大（见下） |
+| 5 | QOI+deflate | QOI 码流再过一层 raw deflate | **实验**（2026-09-30）：桌面整屏 −23%，见下；驱动还不会发 |
+
+### QOI + deflate（`DECODER_TYPE 5`，2026-09-30 实验）
+
+**动机**：链路已经跑满（直插根口 1.13 MB/s，见 [scripts.md](scripts.md) 的拓扑 A/B），
+设备侧每帧只用 ~5 ms，所以能换时间的只剩**少发字节**。QOI 只看相邻像素，**像素之间**的重复
+（同一个字形、同一行渐变、重复的 UI 元素）它看不见；在 QOI 码流后面加一级 LZ77 + Huffman
+正好补这一块。
+
+**离线测算**（`desktop_codecs.py` 的 8 个区域求和，按设备 `band_pixels` 分带，每带一个流）：
+
+| 第二级 | 合成桌面 | 壁纸照片 | 主机 C 编码/8 区域 |
+| --- | --- | --- | --- |
+| 无（QOI） | 139430 B | 221186 B | — |
+| LZ4-HC | −16.0% | −7.3% | 2.6 ms |
+| **deflate 1 级** | **−29.6%** | **−25.0%** | 2.8 ms |
+| deflate 6 级 | −31.1% | −25.9% | 3.3 ms |
+| deflate 6 级、4 KB 窗口 | −30.7% | −25.9% | 3.1 ms |
+| 原始像素直接 deflate | −26.8% | −17.8% | 10~20 ms |
+
+1 级就拿到几乎全部收益、窗口缩到 4 KB 也不掉，而 LZ4 叠在 QOI 后面几乎没用 —— 所以选
+deflate 1 级。内核自带 `zlib_deflate`，驱动同样不必 vendor 编码器（这正是当初看中 LZ4 的
+理由，见 [todo.md](todo.md) 第 7 条）。
+
+**实现**：主机 `pud_usb.qoiz_encode()` = `qoi_encode()` + `zlib.compressobj(1, DEFLATED, -15)`；
+设备 `qoiz_drawimg()` 用 **miniz 3.0.2 的 tinfl**（`src/decoders/miniz/`，只 vendor 了 inflate
+那一半，四个上游文件逐字节未改，平台设置放在我们自己的 `miniz.h` 垫片里）把传输解到静态
+`qoiz_buf[PUD_MAX_TRANSFER]`，再交给 `qoi_drawimg()` —— 之后的非回调解码、band 乒乓、刷屏
+全是 QOI 路径原样。一块缓冲就够：QOI 解码是同步的，`qoi_drawimg()` 返回前就读完了它（异步
+flush 读的是 `qoi_band[]`）。inflate 出来的是一条 QOI band，上限就是一个传输的大小，所以
+缓冲按 `PUD_MAX_TRANSFER` 定；超出或损坏**计数丢弃、不截断**（`g_decoder_stat_qoiz_oversize` /
+`g_decoder_stat_qoiz_bad`）。开机 logo 沿用 QOI 那一支（`bootlogo.h` 没有新分支）。
+`tinfl_decompress` 借 `MINIZ_EXPORT` 这个宏钩子放进 SRAM（`PUD_CODEC_IN_RAM`）。
+
+**代价**：RAM **+79 KB**（312580 → 391720 B，59.6% → 74.7%）= `qoiz_buf` 64 KB +
+`tinfl_decompressor` 8.2 KB（Huffman 查表）+ SRAM 里的 tinfl 代码 5 KB；flash +5.8 KB。
+**RP2040 放不下**（那边只有 256 KB 可用），这条只给 RP2350。
+
+**板上 A/B**（2026-09-30，直插根口，225 MHz，两份固件都开 `DECODER_STATS`，
+`desktop_codecs.py --device --frames 20`，编码在计时外，每侧 349 次解码后
+`submitted == drawn`、`dropped`/`bad`/`qoiz_bad`/`qoiz_oversize` = 0、`CFSR`/`HFSR` = 0）：
+
+| 区域 | QOI 载荷 | QOI | QOI+deflate 载荷 | QOI+deflate | 变化 |
+| --- | --- | --- | --- | --- | --- |
+| 面板条 480×24 | 2122 B | 2.00 ms | 1287 B | **1.17 ms** | −42% |
+| 文本行 272×14 | 2010 B | 1.89 ms | 1103 B | **1.00 ms** | −47% |
+| 列表行 240×16 | 682 B | 0.69 ms | 456 B | **0.47 ms** | −32% |
+| 标题栏 260×22 | 735 B | 0.74 ms | 530 B | **0.51 ms** | −31% |
+| 窗口空白体 260×60 | 2612 B | 2.36 ms | 1299 B | **1.15 ms** | −51% |
+| 终端窗体 288×140 | 18124 B | 16.18 ms | 9697 B | **8.59 ms** | −47% |
+| 壁纸条 480×60 | 19252 B | 17.65 ms | 15271 B | 17.40 ms | −1% |
+| 整屏 | 93893 B | 85.23 ms | 68455 B | **65.88 ms** | **−23%** |
+
+- **文本/UI 区域快一半**，时间和载荷同比例下降：仍然是链路受限，inflate 没进关键路径。
+- **壁纸条几乎不变**（载荷 −21%，时间 −1%，带宽从 1.09 掉到 0.88 MB/s）：这是照片内容，
+  解出来的 QOI 最大，**设备侧开始追上链路**。
+- **inflate 的实测速度**：2.88 MB QOI 输出用了 502 ms = **174 ns/输出字节（≈5.7 MB/s）**，
+  每 band 平均 1.44 ms，和 QOI 解码+刷屏（1.48 ms/band）同一量级 —— 设备侧每 band 的工作量
+  **翻了一倍**。桌面文本/UI 区域里它仍藏在传输后面，照片类内容上不再完全藏得住。
+- **两侧的 QOI 路径耗时一致**（515 vs 517 ms / 349 次），说明 inflate 之后的那段完全没变。
+
+**没做 / 下一步**：
+
+- inflate 与 QOI 解码目前**串行**（先解完整个传输再 QOI）；照片内容上设备侧开始追上链路，
+  可以换更快的 inflate，或让 inflate 与 QOI 解码分到两个核上（都未测）。
+- **驱动还不会发**：要在驱动仓里 QOI 编码后接 `zlib_deflate`（1 级、raw、`-MAX_WBITS`），
+  并把 `DECODER_TYPE 5` 加进驱动的解码器表与两边的 `usb-protocol.md`。协议字段只是新增一个
+  `decoder_type` 值，EP1 帧格式不变。
+- 没在真实合成器的 damage 流上测（上面是 `desktop_codecs.py` 的合成桌面）。
 
 ### LZ4（2026-09 重新设计）
 

@@ -67,7 +67,8 @@ struct pud_caps {
 	u32 magic;
 	u32 proto_ver;
 	u32 frame_max; /* max bytes per EP1 transfer, header included */
-	u32 decoder_type; /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE */
+	u32 decoder_type; /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE,
+	                     5 QOI+deflate (experimental) */
 
 	u16 xres; /* panel size in the frame it is driven in */
 	u16 yres;
@@ -109,7 +110,7 @@ struct pud_caps {
  * bit stays unused instead of being renumbered, the same rule the request
  * numbers follow: an implementation that already knows it must not silently
  * start meaning something else. */
-#define PUD_PARAM_DECODER 0x00000008 /* 0..4, DECODER_TYPE numbering */
+#define PUD_PARAM_DECODER 0x00000008 /* 0..5, DECODER_TYPE numbering */
 
 struct pud_params {
 	u32 mask; /* PUD_PARAM_*: which of the values below this write sets */

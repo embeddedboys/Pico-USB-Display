@@ -1,0 +1,8 @@
+# Vendored code -- miniz 3.0.2 (richgel999/miniz), inflate half only.  The four
+# upstream files (miniz_tinfl.c/.h, miniz_common.h, LICENSE) must stay
+# byte-identical to that tag, so nothing here may be reformatted.  The two shims
+# next to them (miniz.h, miniz_export.h) are ours: they stand in for headers
+# upstream generates, and are kept in the same unformatted state.
+---
+DisableFormat: true
+...

@@ -29,7 +29,17 @@
 #include "lz4.h"
 #include "usb.h"
 #include "pud.h" /* PUD_EP1_HEADER_SIZE, the EP1 framing */
+#if DECODER_TYPE == DECODER_USE_QOIZ
+/* QOI+deflate has no logo branch of its own: the logo is plain QOI, drawn with
+ * qoi_drawimg() (see decoder_draw_bootlogo), so take the QOI array. */
+#undef DECODER_TYPE
+#define DECODER_TYPE DECODER_USE_QOI
 #include "bootlogo.h"
+#undef DECODER_TYPE
+#define DECODER_TYPE DECODER_USE_QOIZ
+#else
+#include "bootlogo.h"
+#endif
 
 #include "pico/time.h"
 
@@ -583,6 +593,93 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
 	STAT_DRAW_ADD();
 }
 
+#if DECODER_TYPE == DECODER_USE_QOIZ
+/*
+ * QOI + deflate (experimental, DECODER_TYPE 5).
+ *
+ * The host QOI-encodes a band exactly as for DECODER_TYPE 3 and then runs raw
+ * deflate (RFC 1951, no zlib header) over that stream: QOI leaves the repeats
+ * *between* pixels on the table -- the same text glyph, the same row of a
+ * gradient -- and an LZ77 stage picks them up (measured on the desktop regions:
+ * 25~31% fewer bytes than QOI alone, see notes/decoders.md).
+ *
+ * The device inflates the transfer into one buffer and hands that to
+ * qoi_drawimg(), so everything after the inflate -- the non-callback decode, the
+ * band ping-pong, the panel write -- is the QOI path unchanged.  One buffer is
+ * enough: the QOI decode is synchronous and finishes reading it before
+ * qoi_drawimg() returns (the asynchronous flush reads qoi_band[], not this).
+ *
+ * The inflated stream is a QOI band, which is at most 3 bytes per pixel plus 16
+ * bytes of framing for band_pixels pixels -- i.e. it fits a transfer, which is
+ * how band_pixels was derived in the first place.  A stream that inflates to
+ * more than that, or not at all, is dropped and counted, never truncated.
+ */
+static u8 qoiz_buf[PUD_MAX_TRANSFER] __attribute__((aligned(4)));
+
+#include "miniz.h"
+
+static tinfl_decompressor qoiz_inflator;
+
+/* Diagnostics: transfers whose deflate stream was corrupt, and ones whose
+ * output would not fit qoiz_buf. */
+volatile u32 g_decoder_stat_qoiz_bad;
+volatile u32 g_decoder_stat_qoiz_oversize;
+#if DECODER_STATS
+volatile u32 g_qoiz_stat_inflate_us; /* time spent inflating */
+volatile u32 g_qoiz_stat_in_bytes; /* deflate bytes consumed */
+volatile u32 g_qoiz_stat_out_bytes; /* QOI bytes produced */
+#endif
+
+/* Inflate one transfer into qoiz_buf.  Returns the QOI byte count, or 0 after
+ * counting why it failed. */
+static size_t qoiz_inflate(const u8 *in, size_t in_size)
+{
+	size_t in_len = in_size;
+	size_t out_len = sizeof(qoiz_buf);
+	tinfl_status st;
+
+	tinfl_init(&qoiz_inflator);
+	/* no TINFL_FLAG_HAS_MORE_INPUT: the transfer is the whole stream (a host
+	 * that pads to an even length leaves a byte after the final block, which
+	 * the inflater never asks for) */
+	st = tinfl_decompress(&qoiz_inflator, in, &in_len, qoiz_buf, qoiz_buf,
+	                      &out_len, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+#if DECODER_STATS
+	g_qoiz_stat_in_bytes += in_len;
+	g_qoiz_stat_out_bytes += out_len;
+#endif
+	if (st == TINFL_STATUS_HAS_MORE_OUTPUT) {
+		g_decoder_stat_qoiz_oversize++;
+		return 0;
+	}
+	if (st != TINFL_STATUS_DONE) {
+		g_decoder_stat_qoiz_bad++;
+		return 0;
+	}
+	return out_len;
+}
+
+void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data, u32 qoiz_size)
+{
+	size_t qoi_len;
+#if DECODER_STATS
+	u32 t0 = time_us_32();
+#endif
+
+	if (qoiz_data == NULL || qoiz_size == 0)
+		return;
+
+	qoi_len = qoiz_inflate(qoiz_data, qoiz_size);
+#if DECODER_STATS
+	g_qoiz_stat_inflate_us += time_us_32() - t0;
+#endif
+	if (qoi_len == 0)
+		return;
+
+	qoi_drawimg(xs, ys, xe, ye, qoiz_buf, qoi_len);
+}
+#endif /* DECODER_USE_QOIZ */
+
 /*
  * JPEG decoding and the TFT flush must NOT run on the USB interrupt stack:
  * the decode path needs a large stack and holding the USB IRQ for tens of
@@ -722,6 +819,10 @@ static void decoder_draw_bootlogo(void)
 		                                    y + rows - 1),
 		            (u8 *)p + start, end - start);
 	}
+#elif DECODER_TYPE == DECODER_USE_QOIZ
+	/* stored as plain QOI, see the bootlogo.h include */
+	qoi_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1, (uint8_t *)bootlogo,
+	            sizeof(bootlogo));
 #else
 	decoder_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1,
 	                (uint8_t *)bootlogo, sizeof(bootlogo));
@@ -795,7 +896,10 @@ static void decoder_task(void *param)
 
 /* Indexed by DECODER_TYPE.  The numbering must not shift: the device reports
  * this value to the host through PUD_CMD_GET_CAPS. */
-static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4", "QOI", "RLE" };
+static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4",
+	                         "QOI",   "RLE",     "QOI+deflate" };
+_Static_assert(DECODER_TYPE < sizeof(decoder_names) / sizeof(decoder_names[0]),
+               "decoder_names[] has to cover every DECODER_TYPE");
 
 void decoder_init(void)
 {

@@ -242,7 +242,7 @@ struct pud_caps {
     u32 magic;          /* PUD_CAPS_MAGIC = 0x43445550 ("PUDC") */
     u32 proto_ver;      /* PUD_PROTO_VER = 2；不匹配主机要大声报错 */
     u32 frame_max;      /* 单次 EP1 传输上限（**含 12 字节 header**）：RP2350 65536 / RP2040 32768 */
-    u32 decoder_type;   /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE */
+    u32 decoder_type;   /* 0 tjpgd, 1 JPEGDEC, 2 LZ4, 3 QOI, 4 RLE, 5 QOI+deflate（实验） */
 
     /* 下面这些是后来追加的：前 16 字节的布局没动，所以只读 16 字节的老主机
      * 仍然拿得到合法答复（设备按主机请求的长度截断应答）。 */
@@ -292,7 +292,7 @@ struct req_set_param {
 #define PUD_PARAM_ROTATION 0x00000002 /* 0..3，TFT_ROTATION 编号 */
 /* 0x00000004 已退休：它原来是 fps，而设备侧根本不控节奏（EP1 流控让主机等），
  * 位号**不复用**，理由与请求号一样：已经知道这个号的实现不能被静默改语义。 */
-#define PUD_PARAM_DECODER 0x00000008 /* 0..4，DECODER_TYPE 编号 */
+#define PUD_PARAM_DECODER 0x00000008 /* 0..5，DECODER_TYPE 编号 */
 
 struct pud_params {
 	u32 mask; /* 本次要设置哪几个字段 */
