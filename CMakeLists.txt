@@ -106,6 +106,17 @@ set(PUD_SOURCES
 # Include config files if exist
 include(${PUD_SOURCE_DIR}/decoders/config.cmake)
 
+# Run the QOI/RLE per-pixel decode loops from SRAM instead of XIP flash, using
+# the codec libraries' RGB565_*_SECTION hook (the vendored files stay identical
+# to their upstream repositories).  Measured on the RP2350: 6~9% off the
+# device-side decode for ~2.3 KB of RAM, and nothing end to end while the USB
+# link is the bottleneck -- details in notes/architecture.md:
+#   cmake .. -DPUD_CODEC_IN_RAM=0
+# It is read by the codec subdirectories below, so it has to be set before them:
+# defined after, a fresh build directory's first configure saw it empty and
+# silently left the loops in flash (only a second configure picked it up).
+set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
+
 # Add libs or source files in subdirs
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
 add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
@@ -136,14 +147,6 @@ set(DECODER_STATS 0 CACHE STRING "collect g_qoi_stat_* decode/display timings")
 # how its value was measured (see notes/decoders.md):
 #   cmake .. -DPUD_DECODER_PINGPONG=0
 set(PUD_DECODER_PINGPONG 1 CACHE STRING "overlap QOI/RLE batch decode with the panel write")
-
-# Run the QOI/RLE per-pixel decode loops from SRAM instead of XIP flash, using
-# the codec libraries' RGB565_*_SECTION hook (the vendored files stay identical
-# to their upstream repositories).  Measured on the RP2350: 6~9% off the
-# device-side decode for ~2.3 KB of RAM, and nothing end to end while the USB
-# link is the bottleneck -- details in notes/architecture.md:
-#   cmake .. -DPUD_CODEC_IN_RAM=0
-set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
 
 # EP1 sink: accept image transfers, count them and throw them away -- no decode,
 # no panel write.  It exists so the USB link can be measured on its own: with it,
