@@ -760,8 +760,28 @@ void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data, u32 qoiz_size)
  * milliseconds wedges the USB controller and corrupts the interrupt stack.
  * The USB ISR therefore just copies the received frame into a slot and wakes
  * a dedicated decoder task which does the actual work.
+ *
+ * How many slots decides whether the decoder is visible at all.  EP1 is armed
+ * only while a slot is free, so the device can receive the next band while the
+ * current one is being decoded only if there is a slot for it: the pipeline is
+ * slots - 1 bands deep, and anything the decoder spends beyond that shows up in
+ * the host's frame time.
+ *
+ * Measured on an RP2350 at 225 MHz, QOI+deflate level 6, a full 480x320 screen,
+ * the same instrument for every row (notes/decoders.md).  The baseline is QOI in
+ * the same session, 93893 B in 101.06 ms:
+ *
+ *   slots  bytes  frame     vs QOI   the extra is
+ *   2      68874   78.0 ms  -22.8%   ~4 ms of decode, still on the critical path
+ *   3      68874   73.7 ms  -27.1%   nothing -- 73.6 ms is the link with no
+ *                                    decoder at all (PUD_EP1_SINK)
+ *
+ * One slot holds any transfer the control stage accepts, so the third slot costs
+ * PUD_MAX_TRANSFER: 32 KB on an RP2040, 64 KB on an RP2350.  Both still fit
+ * (measured: RP2350 .data+.bss 504 KB of 512 KB with four, 440 KB with three;
+ * that build links and then has no room for the stacks, so four is out of reach).
  */
-#define DECODER_FRAME_SLOTS 2
+#define DECODER_FRAME_SLOTS 3
 /* One slot has to hold any transfer the control stage accepts, so it is sized
  * by the same per-board constant as ep1_read_buffer (PUD_MAX_TRANSFER, see
  * usbd_vendor.h). */
