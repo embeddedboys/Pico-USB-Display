@@ -66,16 +66,58 @@ flush 读的是 `qoi_band[]`）。inflate 出来的是一条 QOI band，上限�
 
 - **文本/UI 区域快一半**，时间和载荷同比例下降：仍然是链路受限，inflate 没进关键路径。
 - **壁纸条几乎不变**（载荷 −21%，时间 −1%，带宽从 1.09 掉到 0.88 MB/s）：这是照片内容，
-  解出来的 QOI 最大，**设备侧开始追上链路**。
+  解出来的 QOI 最大，**设备侧开始追上链路**。起初以为是 inflate 拖住的，换 libdeflate 之后
+  证明**不是**（见下一节）。
 - **inflate 的实测速度**：2.88 MB QOI 输出用了 502 ms = **174 ns/输出字节（≈5.7 MB/s）**，
   每 band 平均 1.44 ms，和 QOI 解码+刷屏（1.48 ms/band）同一量级 —— 设备侧每 band 的工作量
   **翻了一倍**。桌面文本/UI 区域里它仍藏在传输后面，照片类内容上不再完全藏得住。
 - **两侧的 QOI 路径耗时一致**（515 vs 517 ms / 349 次），说明 inflate 之后的那段完全没变。
 
+#### 换 inflate：libdeflate（`PUD_INFLATE`，2026-09-30）
+
+两种 inflate 解同一种 raw deflate，主机分不出来，所以是**构建开关，不是协议字段**：
+`cmake .. -DDECODER_TYPE=5 -DPUD_INFLATE=libdeflate`（默认 `tinfl`）。libdeflate v1.26 只
+vendor 了解压那一半（`src/decoders/libdeflate/`，7 个上游文件逐字节未改）。它的解压器结构体是
+不透明的、靠分配钩子要内存，所以设备给它一块静态的 12 KB（`qoiz_ld_mem`，实际要 11564 B），
+不走堆。它没有放置钩子（热循环是模板展开的 `static` 函数），`PUD_CODEC_IN_RAM` 下改用
+**构建后 `objcopy --rename-section .text=.time_critical.libdeflate`** 把整个解压器挪进 SRAM
+（`-fno-function-sections` 让它只有一个 `.text`；GNU as 没有 ELF 的 `--rename-section`）。
+代价比 tinfl 多 RAM 7.7 KB（391720 → 399476 B，76.2%）、flash 5 KB。
+
+**每 band 设备侧耗时**（同一块板，两份固件都开 `DECODER_STATS`，每档 100 个 band、band 之间
+空 20 ms，保证设备每次都是空闲开始；`submitted == drawn`、所有丢弃计数 0、`CFSR` = 0）：
+
+| band（inflate 后 QOI 字节） | tinfl | libdeflate | QOI 解码+刷屏 |
+| --- | --- | --- | --- |
+| 列表行 240×16（682 B） | 349 µs（511 ns/B） | **191 µs**（280 ns/B） | 131 µs |
+| 面板条 480×24（2122 B） | 562 µs（265 ns/B） | **358 µs**（169 ns/B） | 379 µs |
+| 终端窗体 288×70（~9 KB） | 1509 µs（167 ns/B） | **1022 µs**（113 ns/B） | 1306 µs |
+
+- **libdeflate 的 inflate 快 32~45%**，小 band 上收益最大 —— 那里主要是每个流的**固定开销**
+  （建 Huffman 表），而不是按字节的开销：tinfl 在 682 B 的 band 上是 511 ns/B，9 KB 时 167 ns/B。
+  前面那个"174 ns/B"是大 band 为主的平均值，**不能拿来估小矩形**。
+- 小 band 上 inflate 比 QOI 解码本身还贵（tinfl 2.7 倍、libdeflate 1.5 倍）。
+
+**但端到端没变**（`desktop_codecs.py --device --frames 20`，同一会话背靠背两份）：整屏
+65.84（tinfl）/ 66.96 ms（libdeflate）、壁纸条 17.38 / 17.17 ms，其余区域都在 ±0.2 ms 以内 ——
+**在噪声里**。桌面负载是链路受限，设备每 band 省下的几百微秒藏在传输后面，这一点和
+`PUD_CODEC_IN_RAM`、批次乒乓的结论一样（设备侧有收益，端到端看不出来）。
+
+**壁纸条的"设备追上链路"不是 inflate 造成的**：单独发这块（tinfl 固件），背靠背 17.40 ms、
+每帧前空 50 ms 则 14.07 ms（1.09 MB/s，就是链路速度）—— 确实有 ~3.3 ms 是设备侧的。可
+inflate 快了 ~0.9 ms/帧，端到端只少 0.2 ms，所以剩下那段**主要不在 inflate 里**。推测是照片
+band 的 QOI 解码：非回调版照片内容 22.4 ms/整屏 ≈ 0.15 µs/像素，45 行的 band（21600 px）
+≈ 3.1 ms，比这个 band 的 inflate（16429 B × ~113 ns ≈ 1.9 ms）大。**未拆解、未验证**，
+要定因得在壁纸条上读 `draw_us` 与 `flush_us` 的增量。
+
+**结论**：两种都留着，默认仍是 tinfl（小、没有构建期技巧）。libdeflate 只在**设备受限**时才
+值得换：更小的 damage 矩形被批量发、链路变快（USB 高速），或 RP2040 那种更慢的核（但 QOIZ 本来
+就放不进 RP2040）。
+
 **没做 / 下一步**：
 
-- inflate 与 QOI 解码目前**串行**（先解完整个传输再 QOI）；照片内容上设备侧开始追上链路，
-  可以换更快的 inflate，或让 inflate 与 QOI 解码分到两个核上（都未测）。
+- inflate 与 QOI 解码目前**串行**；按上面的测量，照片内容上瓶颈更像是 QOI 解码而不是 inflate，
+  所以"双核流水线"要先拆清楚壁纸条那 3.3 ms 再说，别再按 inflate 算收益。
 - **驱动还不会发**：要在驱动仓里 QOI 编码后接 `zlib_deflate`（1 级、raw、`-MAX_WBITS`），
   并把 `DECODER_TYPE 5` 加进驱动的解码器表与两边的 `usb-protocol.md`。协议字段只是新增一个
   `decoder_type` 值，EP1 帧格式不变。

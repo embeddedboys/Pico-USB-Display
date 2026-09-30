@@ -138,6 +138,23 @@ add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 #   cmake .. -DDECODER_TYPE=5
 set(DECODER_TYPE 3 CACHE STRING "decoder the firmware is built for (protocol field)")
 
+# Which inflate DECODER_TYPE 5 uses.  Both decode the same raw deflate stream, so
+# this is not a protocol field -- the host cannot tell them apart:
+#   tinfl       miniz 3.0.2 (src/decoders/miniz/), small and portable
+#   libdeflate  libdeflate v1.26 (src/decoders/libdeflate/), a faster one-shot
+#               decoder that wants the whole input and output at once -- which is
+#               how the transfer arrives anyway
+#   cmake .. -DDECODER_TYPE=5 -DPUD_INFLATE=libdeflate
+set(PUD_INFLATE tinfl CACHE STRING "QOI+deflate inflate: tinfl or libdeflate")
+set_property(CACHE PUD_INFLATE PROPERTY STRINGS tinfl libdeflate)
+if(PUD_INFLATE STREQUAL "libdeflate")
+    set(_pud_inflate 2)
+elseif(PUD_INFLATE STREQUAL "tinfl")
+    set(_pud_inflate 1)
+else()
+    message(FATAL_ERROR "PUD_INFLATE must be tinfl or libdeflate, not '${PUD_INFLATE}'")
+endif()
+
 # Decode / display-path timing counters (g_qoi_stat_* in src/decoders/decoder.c).
 # Cost is two time_us_32() reads per flush batch, so it is off by default;
 # enable it when you want to split a frame into QOI decode and panel write time:
@@ -205,6 +222,7 @@ target_link_libraries(${PROJECT_NAME}
     qoi
     rle
     miniz
+    libdeflate
     FreeRTOS-Kernel-Heap3
 )
 
@@ -212,6 +230,7 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
     PUD_PANEL_WIDTH_MM=${PUD_PANEL_WIDTH_MM}
     PUD_PANEL_HEIGHT_MM=${PUD_PANEL_HEIGHT_MM})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
+target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_INFLATE=${_pud_inflate})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_EP1_SINK=${PUD_EP1_SINK})

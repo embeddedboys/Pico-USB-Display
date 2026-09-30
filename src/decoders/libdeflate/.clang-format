@@ -1,0 +1,6 @@
+# Vendored code -- libdeflate v1.26 (ebiggers/libdeflate), decompressor only.
+# The upstream files must stay byte-identical to that tag, so nothing here may
+# be reformatted.
+---
+DisableFormat: true
+...

@@ -616,9 +616,43 @@ void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data, u32 rle_size)
  */
 static u8 qoiz_buf[PUD_MAX_TRANSFER] __attribute__((aligned(4)));
 
+/*
+ * The inflate is a build choice (PUD_INFLATE, see CMakeLists.txt): both decode
+ * the same raw deflate stream, so the host cannot tell them apart.
+ *   1  tinfl (miniz 3.0.2): a resumable state machine, 8.2 KB of state
+ *   2  libdeflate v1.26: one-shot, wants the whole input and output at once --
+ *      which is exactly how a transfer arrives
+ */
+#if PUD_INFLATE == 2
+#include "libdeflate.h"
+
+/*
+ * libdeflate's decompressor struct is opaque and allocated through a hook, so
+ * hand it one static block instead of the heap: the first (and only) request is
+ * served from here, anything after that fails.  The size is checked against the
+ * request rather than assumed.
+ */
+static u8 qoiz_ld_mem[12 * 1024] __attribute__((aligned(8)));
+static bool qoiz_ld_used;
+static struct libdeflate_decompressor *qoiz_ld;
+
+static void *qoiz_ld_alloc(size_t size)
+{
+	if (qoiz_ld_used || size > sizeof(qoiz_ld_mem))
+		return NULL;
+	qoiz_ld_used = true;
+	return qoiz_ld_mem;
+}
+
+static void qoiz_ld_free(void *p)
+{
+	(void)p;
+}
+#else
 #include "miniz.h"
 
 static tinfl_decompressor qoiz_inflator;
+#endif
 
 /* Diagnostics: transfers whose deflate stream was corrupt, and ones whose
  * output would not fit qoiz_buf. */
@@ -634,6 +668,45 @@ volatile u32 g_qoiz_stat_out_bytes; /* QOI bytes produced */
  * counting why it failed. */
 static size_t qoiz_inflate(const u8 *in, size_t in_size)
 {
+#if PUD_INFLATE == 2
+	size_t in_len = 0, out_len = 0;
+	enum libdeflate_result res;
+
+	if (qoiz_ld == NULL) {
+		struct libdeflate_options opts = {
+			.sizeof_options = sizeof(opts),
+			.malloc_func = qoiz_ld_alloc,
+			.free_func = qoiz_ld_free,
+		};
+
+		qoiz_ld = libdeflate_alloc_decompressor_ex(&opts);
+		if (qoiz_ld == NULL) {
+			/* qoiz_ld_mem is smaller than this libdeflate needs */
+			g_decoder_stat_qoiz_bad++;
+			return 0;
+		}
+	}
+
+	/* Decoding stops at the final block, so a pad byte after it is fine;
+	 * actual_out_nbytes_ret is given because the QOI length is not known
+	 * up front (only its upper bound, the buffer). */
+	res = libdeflate_deflate_decompress_ex(qoiz_ld, in, in_size, qoiz_buf,
+	                                       sizeof(qoiz_buf), &in_len,
+	                                       &out_len);
+#if DECODER_STATS
+	g_qoiz_stat_in_bytes += in_len;
+	g_qoiz_stat_out_bytes += out_len;
+#endif
+	if (res == LIBDEFLATE_INSUFFICIENT_SPACE) {
+		g_decoder_stat_qoiz_oversize++;
+		return 0;
+	}
+	if (res != LIBDEFLATE_SUCCESS) {
+		g_decoder_stat_qoiz_bad++;
+		return 0;
+	}
+	return out_len;
+#else
 	size_t in_len = in_size;
 	size_t out_len = sizeof(qoiz_buf);
 	tinfl_status st;
@@ -657,6 +730,7 @@ static size_t qoiz_inflate(const u8 *in, size_t in_size)
 		return 0;
 	}
 	return out_len;
+#endif
 }
 
 void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data, u32 qoiz_size)
@@ -897,7 +971,13 @@ static void decoder_task(void *param)
 /* Indexed by DECODER_TYPE.  The numbering must not shift: the device reports
  * this value to the host through PUD_CMD_GET_CAPS. */
 static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4",
-	                         "QOI",   "RLE",     "QOI+deflate" };
+	                         "QOI",   "RLE",
+#if PUD_INFLATE == 2
+	                         "QOI+deflate (libdeflate)"
+#else
+	                         "QOI+deflate (tinfl)"
+#endif
+};
 _Static_assert(DECODER_TYPE < sizeof(decoder_names) / sizeof(decoder_names[0]),
                "decoder_names[] has to cover every DECODER_TYPE");
 

@@ -181,6 +181,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 | `PUD_CODEC_IN_RAM` | `1` | QOI/RLE 解码循环放 SRAM（编解码库的 `RGB565_*_SECTION` 钩子）；设备侧解码快 2~9%，链路受限时端到端无变化（[architecture.md](notes/architecture.md)） |
 | `QOI_NONCALLBACK` | `2` | QOI 走非回调 API + band 乒乓；设备侧比回调版快 22~48%，代价是 87 KB 缓冲（`0`/`1` 只用于 A/B 和回落，[decoders.md](notes/decoders.md)） |
 | `DECODER_STATS` | `0` | 解码/刷屏耗时计数器（`g_qoi_stat_*`），调试用 |
+| `PUD_INFLATE` | `tinfl` | 只对 `DECODER_TYPE=5` 生效：`tinfl`（miniz）或 `libdeflate`；解同一种码流，**不是协议字段**。libdeflate 设备侧 inflate 快 32~45%，桌面负载端到端无变化（[decoders.md](notes/decoders.md)） |
 
 ## 用户空间工具（`tools/`）与验证脚本（`tests/`）
 
