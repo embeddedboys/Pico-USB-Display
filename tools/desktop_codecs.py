@@ -41,7 +41,15 @@ W, H = 480, 320
 WALLPAPER = REPO / "assets" / "xfce.jpg"
 TOOL = REPO / "tools" / "build" / "pudcodec"
 FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
-LINK_BYTES_PER_S = 1.1e6        # measured EP1 throughput
+#: Fallback transfer rate for the host-side table, in bytes/s.  This is a
+#: *model*, not a measurement of the run you are looking at: the number comes
+#: from one session in 2026-09, and the same board behind the same kind of root
+#: port has since measured 0.935 MB/s -- 15% lower.  With --device the table is
+#: calibrated with a real transfer instead (calibrate_link()) and the header says
+#: which of the two it used.  A modelled time standing next to a measured one is
+#: how a codec ends up looking slower than it is, which is a mistake this file
+#: made: its QOI column was quoted as a device measurement for a whole session.
+LINK_BYTES_PER_S = 1.1e6
 
 #: Rectangles a desktop plausibly damages, in panel coordinates.  Small ones
 #: dominate: that is what window redraws and text edits produce.
@@ -175,10 +183,10 @@ def lz4_payload(raw, w, h, tmp):
     return sum(off[i + 1] - off[i] for i in range(count)) + 12 * count
 
 
-def host_table(images, tmp):
+def host_table(images, tmp, rate=LINK_BYTES_PER_S, origin="constant"):
     """Payload sizes per codec for every region of each workload image."""
-    print("payload bytes per rectangle, and the transfer time at %.1f MB/s"
-          % (LINK_BYTES_PER_S / 1e6))
+    print("payload bytes per rectangle; the time in brackets is %s at %.3f MB/s"
+          % (origin, rate / 1e6))
     print("%-20s %7s %8s | %8s %8s %8s | %s"
           % ("region", "pixels", "raw", "qoi", "rle", "lz4", "smallest"))
     print("-" * 82)
@@ -202,7 +210,7 @@ def host_table(images, tmp):
                   % (name, w * h, len(raw),
                      *[sizes.get(k, "-") for k in ("qoi", "rle", "lz4")],
                      best, sizes[best],
-                     sizes[best] / LINK_BYTES_PER_S * 1e3))
+                     sizes[best] / rate * 1e3))
         print("   sum over the listed regions (they overlap; for ranking "
               "only): %s" % ", ".join("%s %d B" % (k, v)
                                       for k, v in sorted(total.items())))
@@ -212,6 +220,34 @@ def host_table(images, tmp):
 # ---------------------------------------------------------------------------
 # Device side: per-rectangle round trip
 # ---------------------------------------------------------------------------
+
+def calibrate_link(px, codec, frames=3):
+    """Measure the link with the payload this run sends, and return bytes/s.
+
+    One full-screen transfer, banded the way the device asks for, through the
+    same submission path the measurement loop uses.  Without this the host table
+    would state its times at a constant nobody re-measured; with it the two
+    tables are on one ruler.
+    """
+    import fps_bench as B
+
+    with P.open_device() as disp:
+        bands = []
+        for label, rect in REGIONS:
+            if label != "full screen":
+                continue
+            x0, y0, x1, y1 = rect
+            rows = max(1, disp.band_pixels // (x1 - x0))
+            for y in range(y0, y1, rows):
+                bh = min(rows, y1 - y)
+                bands.append((x0, y, x1 - 1, y + bh - 1,
+                              P.ENCODERS[codec](crop(px, (x0, y, x1, y + bh)))))
+        nbytes = sum(len(b[4]) for b in bands)
+        med = statistics.median(B.measure(disp, [bands], frames))
+        print("link %.3f MB/s -- measured now, %s, %d bands, %d B, median of %d"
+              % (nbytes / med / 1e6, codec, len(bands), nbytes, frames))
+        return nbytes / med
+
 
 def device_table_px(args, px):
     """Round trip per rectangle, with the host encoding kept out of the loop.
@@ -275,6 +311,11 @@ def main():
     ap.add_argument("--workdir", default=None,
                     help="where to write the generated workload (default: a "
                          "temporary directory)")
+    ap.add_argument("--link-rate", type=float, default=None, metavar="MBPS",
+                    help="rate for the host table's time column, in MB/s; "
+                         "without --device the column is a model at the build-in "
+                         "constant, and this is how to state it at the rate you "
+                         "actually measured")
     ap.add_argument("--gap-ms", type=float, default=0.0,
                     help="pause between transfers (default 0: a tight loop of "
                          "small ones was measured not to break anything)")
@@ -298,7 +339,12 @@ def main():
         images = [("photo wallpaper", tmp / "desktop.png"),
                   ("dithered wallpaper", tmp / "desktop_dither.png")]
 
-    host_table(images, tmp)
+    rate, origin = LINK_BYTES_PER_S, "a model at a constant from an earlier session, NOT a measurement"
+    if args.link_rate is not None:
+        rate, origin = args.link_rate * 1e6, "--link-rate"
+    elif args.device:
+        rate, origin = calibrate_link(pixels(images[0][1]), args.codec), "measured in this run"
+    host_table(images, tmp, rate, origin)
     if args.device:
         device_table_px(args, pixels(images[0][1]))
     return 0
