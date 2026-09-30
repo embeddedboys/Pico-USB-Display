@@ -101,6 +101,13 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 6. **调试器是定位工具，别为了"纯 USB"丢掉它**：PC 直接说明状态（在函数里 = 在跑；
    `isr_hardfault` = 真挂了；在 bootrom = 镜像没起来）。
 7. **工具输出不要静默**（`>/dev/null` 会把真正的错误一起吞掉 ✗），关键步骤把结果打出来。
+8. **不要把脚本的"模型列"当实测** ✗：`desktop_codecs.py` 排序表括号里的时间是按
+   `LINK_BYTES_PER_S`（1.1 MB/s 常数，来自另一次会话）算出来的**模型**，只有带
+   `median`/`bandwidth`/`encode` 的 `device_table` 才是设备实测。两者混在一张表里引用过一次，
+   让"QOI 基准"差了 15%（85.22 ms 对真值 100.05 ms ✗）。脚本现在带 `--device` 会先用一次
+   真实传输**标定**并在表头写明来源（`measured in this run` / `a model ... NOT a measurement`）
+   —— 引用任何时间之前先读那一行 ✓。**绝对速率是会话属性**（同一块板同一类端口，实测过
+   0.94 与 1.10 MB/s 两档），只有比值能搬。
 
 ## 架构不变量（动了就坏）
 
@@ -114,7 +121,8 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 2. **EP1 流控必须保留。** 帧槽全忙时**故意不武装 EP1**，让主机的 bulk 传输
    阻塞等待（`usbd_vendor_ep1_tick()`：只有槽空时才武装；每帧提交完/解码任务
    释放槽后都会调用）。
-   判定标准：`g_decoder_stat_dropped == 0`，且 `drawn` 落后 `submitted` 恰好 1 帧。
+   判定标准：`g_decoder_stat_dropped == 0`，且 `drawn` 落后 `submitted` 不超过
+   `DECODER_FRAME_SLOTS - 1` 帧（2 槽时是 1 帧，现在是 3 槽 ⇒ ≤2 ✓ 实测 dropped == 0 ✓）。
    去掉它 = 槽满静默丢帧 = 局部刷新残影。
 3. **RAM 很紧。** RP2350 512 KB SRAM 里 `ep1_read_buffer`（64 KB）+
    `s_frames`（2 × 64 KB）已经占掉一大块；**RP2040 只有 256 KB 可用**，
@@ -124,6 +132,10 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    改它 = 改协议，主机靠 `PUD_CMD_GET_CAPS` 问设备（见"架构不变量"第 6 条）。
    **不要把 `DECODER_FRAME_SLOTS` 或 `PUD_MAX_TRANSFER` 翻倍**
    （RP2040 上实测 128 KB + 2×64 KB 时 .data/.bss 达到 RAM 的 109%，直接链接失败）。
+   **加一槽要按实测算账**：2 → 3 是值得的（解码完全藏进链路：整屏 78.0 → 73.7 ms ✓，
+   tinfl/libdeflate 都一样 ✓；代价 RP2350 +64 KB、RP2040 +32 KB ✓ 两块都编得过），
+   4 槽在 RP2350 上能链接但 `.data+.bss` 到 504 KB、**运行时没有栈**（实测起不来）✗ ——
+   要更深的流水线得先把每次传输的上限调小（槽随之变小，带数变多反而更利于重叠）。
 4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
    它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
 5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读），
@@ -167,7 +179,7 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
-| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验，只 RP2350，驱动还不会发；见 [decoders.md](notes/decoders.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验；驱动还不会发。**两块板都装得下** ✓ —— RP2040 上 3 帧槽实测 164 KB/264 KB，提交信息里"只 RP2350"的说法不成立 ✗；限制不在设备而在**等级**：主机侧 默认已从 level 1 改成 6（字节 −11.2% → −26.6% ✓）。见 [decoders.md](notes/decoders.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
 | `OVERCLOCK_ENABLED` | `1` | 板配置 profile 1：RP2350 225 MHz（QSPI 75 MHz，VREG 1.10V）；实测结论见 [`notes/architecture.md`](notes/architecture.md) |
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限；**面板参数由 `PUD_CMD_GET_CAPS` 上报**，主机不再写死 |
@@ -201,8 +213,15 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   最大行数），因为整帧 block 设备解不了（见"架构不变量"第 9 条）。
 - 本项目面向**桌面**（配合 DRM 驱动），主负载是**局部刷新**：评估编解码器用
   `tools/desktop_codecs.py`（按"桌面会脏的矩形"比较），整屏照片/噪声测试**不代表**它。
-  真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**（载荷少 15~35%，三者都跑在
-  1.0~1.1 MB/s 的链路极限上）；LZ4 的优势在内核侧（不用 vendor 编码器），不是性能
+  真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**，但**引用时必须带上内容** ✓ ——
+  2026-09-30 用同源实测（同一回路、同一分带规则、四种码器 × 两个内容，见
+  [decoders.md](notes/decoders.md) 的"同源复量"一节）复量：真实内容上 QOI 仍比 LZ4 快
+  **27~35%**（载荷比 0.715 与那份 4K 内容的 0.711 差 0.6% ⇒ 原结论成立 ✓），而合成桌面上
+  **LZ4 在 8 个区域里有 6 个反而更小** ✗；另外 **QOI+deflate level 6 在两个内容的每一个
+  区域都最小最快**（真实整屏 138.99 → 106.85 ms、合成 100.02 → 74.03 ms）✓。
+  那几句里的 MB/s 是会话属性（本机复量 0.94，原记录 1.01~1.09），只有比值能搬。
+  LZ4 的优势在内核侧
+  （不用 vendor 编码器），不是性能
   （见 [notes/decoders.md](notes/decoders.md)）。**给设备计时必须把编码放在循环外**，
   否则量的是 Python 编码器而不是解码器。无间隔连发小矩形**不会**打挂板子（2026-09
   无调试器复测，见 [notes/todo.md](notes/todo.md) 第 8 条），脚本 `--gap-ms` 默认 0。
