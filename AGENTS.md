@@ -46,7 +46,8 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
   `./build.sh flash -n` 只打印命令行；各条命令的实测状态见
   [notes/build-and-flash.md](notes/build-and-flash.md)。
 - 子模块要 `--recursive`（CherryUSB / lz4 / pico-display-lib / FreeRTOS-Kernel
-  及其 ports）。直连 GitHub 失败时，"走代理 + `git -c http.version=HTTP/1.1`"
+  及其 ports，以及 **pico-turbo**：时钟/电压/flash 分频那一侧的知识与 `boards/*.cmake`
+  都在它里面，见 <https://github.com/IotaHydrae/pico-turbo>）。直连 GitHub 失败时，"走代理 + `git -c http.version=HTTP/1.1`"
   是验证过可行的组合（`ghproxy`/`gitee` 镜像不可用）。
 - 烧录：OpenOCD 跑在 **Windows 宿主机**（WSL 看不到调试器，也无法 `mknod`
   出 `/dev/bus/usb`），WSL 侧用

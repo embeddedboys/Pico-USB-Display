@@ -7,3 +7,6 @@
 [submodule "lib/lz4"]
 	path = lib/lz4
 	url = https://github.com/lz4/lz4.git
+[submodule "lib/pico-turbo"]
+	path = lib/pico-turbo
+	url = https://github.com/IotaHydrae/pico-turbo.git
