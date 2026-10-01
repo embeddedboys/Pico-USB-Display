@@ -210,6 +210,7 @@ set(QOI_NONCALLBACK ${_qoi_noncallback_default} CACHE STRING
 set(QOI_BUF_ROWS 8 CACHE STRING "QOI callback-path accumulation buffer height in rows")
 
 add_executable(${PROJECT_NAME})
+set_property(TARGET ${PROJECT_NAME} PROPERTY LINKER_LANGUAGE C)
 
 target_sources(${PROJECT_NAME} PRIVATE
     ${PUD_SOURCES}
