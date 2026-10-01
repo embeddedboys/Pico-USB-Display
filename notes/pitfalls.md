@@ -281,7 +281,7 @@ grep -oE "[^ ]*heap_[0-9]\.c" build-pico2/build.ninja | sort -u
 | `IDLE0`/`IDLE1` | 256×2 | 1 KB×2 | 128 / 112 B |
 
 合计约 **9 KB**（收缩前 24 KB）。`Tmr Svc` 的深度由 `configTIMER_TASK_STACK_DEPTH`
-控制，在 `lib/pico-display-lib/FreeRTOSConfig.h` 里；**本工程没有创建任何软件定时器**，
+控制，在 `include/FreeRTOSConfig.h` 里；**本工程没有创建任何软件定时器**，
 所以它只是空转，256 words 足够（真要用定时器回调前先加大）。
 
 （开机 logo 原来是独立的 `bootlogo_task`，现已并进 `decoder_task`，见
@@ -400,8 +400,8 @@ WSL 没有 `/dev/bus/usb`，也无法 `mknod` 造出来。所以：
 
 ### 4.5 子模块拉取
 
-`lib/` 下是嵌套子模块（`CherryUSB`、`lz4`、`pico-display-lib`，以及 `FreeRTOS-Kernel`
-和它的两个 ports 仓库）。必须 `--recursive`，漏了会在编译时报缺文件。
+`lib/` 下的直接子模块包括 `CherryUSB`、`lz4`、`pico-display-lib` 和 `FreeRTOS-Kernel`；
+FreeRTOS 还包含两个 ports 子模块。必须 `--recursive`，漏了会在编译时报缺文件。
 
 直连 GitHub 失败时，走代理并强制 HTTP/1.1 是验证过可行的组合：
 

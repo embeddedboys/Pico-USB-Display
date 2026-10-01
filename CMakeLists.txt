@@ -118,6 +118,14 @@ include(${PUD_SOURCE_DIR}/decoders/config.cmake)
 set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
 
 # Add libs or source files in subdirs
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel CACHE PATH
+    "Path to the FreeRTOS kernel" FORCE)
+set(FREERTOS_CONFIG_FILE_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/include)
+add_library(freertos_config INTERFACE)
+target_include_directories(freertos_config SYSTEM INTERFACE
+    ${FREERTOS_CONFIG_FILE_DIRECTORY})
+include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/Community-Supported-Ports/GCC/RP2350_ARM_NTZ/FreeRTOS_Kernel_import.cmake)
+
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
 add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
 add_subdirectory(${PUD_SOURCE_DIR}/decoders)
@@ -240,6 +248,7 @@ target_link_libraries(${PROJECT_NAME}
     miniz
     libdeflate
     tinyd
+    freertos_config
     FreeRTOS-Kernel-Heap3
 )
 

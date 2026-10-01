@@ -23,8 +23,8 @@ cd ~/pico-sdk && git submodule update --init
 streaming API、字典函数全在），实际用到的只有 `LZ4_decompress_safe` 一个；加上之后
 **33232 → 1012 B**，整机 `text` 从 112580 降到 78988 B。加新编解码库时保持这两个 flag。
 
-子模块（`lib/CherryUSB`、`lib/lz4`、`lib/pico-display-lib`，以及它们自己的嵌套子模块
-`FreeRTOS-Kernel` + `Community-Supported-Ports`/`Partner-Supported-Ports`）都要拉全：
+子模块（`lib/CherryUSB`、`lib/lz4`、`lib/pico-display-lib`、`lib/FreeRTOS-Kernel`
+及其 `Community-Supported-Ports`/`Partner-Supported-Ports`）都要拉全：
 
 ```bash
 git submodule update --init --recursive
