@@ -31,12 +31,22 @@
 #include "pud.h" /* PUD_EP1_HEADER_SIZE, the EP1 framing */
 #if DECODER_TYPE == DECODER_USE_QOIZ
 /* QOI+deflate has no logo branch of its own: the logo is plain QOI, drawn with
- * qoi_drawimg() (see decoder_draw_bootlogo), so take the QOI array. */
+ * qoi_drawimg() (see decoder_draw_bootlogo), so take the QOI array while
+ * bootlogo.h is being included.  Each type restates its own restore rather than
+ * stashing the old value in another macro: a macro body is expanded where it is
+ * used, so a stashed copy would come back as the token DECODER_TYPE again. */
 #undef DECODER_TYPE
 #define DECODER_TYPE DECODER_USE_QOI
 #include "bootlogo.h"
 #undef DECODER_TYPE
 #define DECODER_TYPE DECODER_USE_QOIZ
+#elif DECODER_TYPE == DECODER_USE_QOID
+/* same trick: the dictionary variant decodes QOI underneath too */
+#undef DECODER_TYPE
+#define DECODER_TYPE DECODER_USE_QOI
+#include "bootlogo.h"
+#undef DECODER_TYPE
+#define DECODER_TYPE DECODER_USE_QOID
 #else
 #include "bootlogo.h"
 #endif
@@ -754,6 +764,7 @@ void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data, u32 qoiz_size)
 }
 #endif /* DECODER_USE_QOIZ */
 
+
 /*
  * JPEG decoding and the TFT flush must NOT run on the USB interrupt stack:
  * the decode path needs a large stack and holding the USB IRQ for tens of
@@ -793,11 +804,213 @@ _Static_assert(DECODER_FRAME_MAX >= PUD_MAX_TRANSFER,
 struct decoder_frame {
 	u16 xs, ys, xe, ye;
 	u32 size;
+	/* Position of this band in the accepted sequence.  DECODER_TYPE 6 needs
+	 * it: the payload says which band its dictionary was built from, and the
+	 * slot compares that against what it actually holds. */
+	u32 serial;
 	u8 busy;
 	u8 data[DECODER_FRAME_MAX];
 };
 
 static struct decoder_frame s_frames[DECODER_FRAME_SLOTS];
+/*
+ * Slots are handed out round-robin, not lowest-free-first, and drawn in the same
+ * rotation.  DECODER_TYPE 6 is the reason: its dictionary lives in the slot, so
+ * the host has to know which band is resident there, and "the band submitted
+ * DECODER_FRAME_SLOTS ago" is only true if the slot a band lands in is
+ * `submission % DECODER_FRAME_SLOTS`.  With lowest-free-first that only holds
+ * while the pipeline is saturated -- measured on the board with a host slow
+ * enough to keep one band in flight: 8 of 15 deltas were refused because every
+ * band had gone into slot 0.  A cursor makes the mapping true by construction,
+ * and the drain cursor keeps bands reaching the panel in submission order.
+ */
+static int s_fill_slot;
+static int s_drain_slot;
+
+#if DECODER_TYPE == DECODER_USE_QOID
+/*
+ * QOI + cross-frame dictionary deflate (experimental, DECODER_TYPE 6).
+ *
+ * The host QOI-encodes a band as for DECODER_TYPE 3 and then raw-deflates it
+ * with `zdict` set to a band the device is *known to still hold*, so matches
+ * reach backwards into the previous content instead of starting from nothing.
+ * Measured on the host: a dirty band costs 32744 -> 18939 B (-42.2%) when a lot
+ * changed and 32744 -> 6899 B (-78.9%) when little did, and one band with a UI
+ * element appearing in it 11270 -> 3464 B (-69%) -- the redundancy a desktop
+ * has between frames, which neither QOI nor frame-internal deflate can see.
+ *
+ * The device side is src/decoders/tinyd/: a compact decoder that decodes stored
+ * and *fixed Huffman* blocks (which is what strategy=Z_FIXED produces, +11.0%
+ * bytes on the measured band) and takes its history from the caller's buffer
+ * rather than carrying a 32 KB window.  Measured on the same RP2350, same
+ * payload, same clocks: 15.90 against zlib's 15.52 cycles per output byte, for
+ * 2.4 KB of code instead of 14.1 KB plus 40 KB of window and state.
+ *
+ * One window per frame slot, laid out [history][output].  The slot a band lands
+ * in is `submission % DECODER_FRAME_SLOTS` -- slots are taken lowest-free-first
+ * and consumed in index order -- so the history a host can count on is "whatever
+ * this slot decoded last time", which for a repeating dirty set is the same band
+ * of a previous frame.  Deliberately *not* a whole previous frame: a band's QOI
+ * stream is ~11.7 KB of the measured desktop, ~94 KB for the full screen, and
+ * the build only has ~150 KB spare.
+ *
+ * The dictionary is an input the decoder cannot check: tinyd treats the
+ * caller's buffer as history, so a wrong or stale dictionary still returns
+ * "decoded 11270 bytes" and paints garbage (measured, notes/decoders.md).  The
+ * protocol therefore carries the identity of the band the host built the
+ * dictionary from in the payload's sub-header, and a band is refused unless this
+ * slot holds exactly that band and exactly that many history bytes.  Refusing is
+ * counted and visible; painting wrong pixels is not.
+ */
+#include "tinyd.h"
+
+#define QOID_MAGIC 0x44445550u /* 'PUDD' in little-endian byte order */
+#define QOID_F_DELTA 0x0001u
+#define QOID_F_KEYFRAME 0x0002u
+#define QOID_HDR_SIZE 16u
+
+/* The sub-header lives inside the payload, not in struct pud_ep1_header: that
+ * one is shared by every decoder and is a protocol field, so extending it would
+ * drag the driver and both notes/usb-protocol.md along for one experiment. */
+struct qoid_header {
+	u32 magic;
+	u16 flags;
+	u16 reserved;
+	u32 dict_serial; /* band the dictionary was built from */
+	u32 dict_len; /* dictionary bytes the encoder actually used */
+};
+
+static u8 s_qoid_win[DECODER_FRAME_SLOTS][PUD_DELTA_WIN]
+	__attribute__((aligned(4)));
+/* What each window holds: which band's QOI stream, and how long it is. */
+static u32 s_qoid_serial[DECODER_FRAME_SLOTS];
+static u32 s_qoid_hist_len[DECODER_FRAME_SLOTS];
+static u8 s_qoid_have[DECODER_FRAME_SLOTS];
+
+volatile u32 g_decoder_stat_qoid_bad; /* malformed header, or tinyd refused */
+volatile u32 g_decoder_stat_qoid_mismatch; /* dictionary is not what it claims */
+volatile u32 g_decoder_stat_qoid_oversize; /* band does not fit the window */
+#if DECODER_STATS
+volatile u32 g_qoid_stat_inflate_us;
+volatile u32 g_qoid_stat_hist_bytes;
+volatile u32 g_qoid_stat_out_bytes;
+#endif
+
+void qoid_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *data, u32 size, int slot,
+                  u32 serial)
+{
+	const struct qoid_header *h;
+	u8 *win;
+	size_t dict_len = 0, out_len = 0;
+	u32 cap = (u32)sizeof(s_qoid_win[0]) / 2;
+	/* the window this band decodes into and leaves its history in: this band's
+	 * own slot for a keyframe, the window that holds the dictionary for a
+	 * delta */
+	int win_idx = slot;
+	int rc;
+#if DECODER_STATS
+	u32 t0 = time_us_32();
+#endif
+
+	if (data == NULL || slot < 0 || slot >= DECODER_FRAME_SLOTS)
+		return;
+	if (size < QOID_HDR_SIZE) {
+		g_decoder_stat_qoid_bad++;
+		return;
+	}
+
+	h = (const struct qoid_header *)data;
+	if (h->magic != QOID_MAGIC) {
+		g_decoder_stat_qoid_bad++;
+		return;
+	}
+
+	/*
+	 * Decode against whichever window holds the band the payload names, not
+	 * against this band's own slot.  The frame slot a band lands in depends on
+	 * how full the pipeline was, so a host cannot predict it (measured: with a
+	 * slow host every band lands in one slot, and a host that assumed round
+	 * robin had 8 of 15 deltas refused); naming the band instead makes the
+	 * dictionary the only thing that matters.  Decoding is sequential in one
+	 * task, so two bands cannot share a window concurrently.
+	 */
+	if (h->flags & QOID_F_DELTA) {
+		for (win_idx = 0; win_idx < DECODER_FRAME_SLOTS; win_idx++) {
+			if (s_qoid_have[win_idx] &&
+			    s_qoid_serial[win_idx] == h->dict_serial &&
+			    s_qoid_hist_len[win_idx] == h->dict_len)
+				break;
+		}
+		if (win_idx == DECODER_FRAME_SLOTS) {
+			g_decoder_stat_qoid_mismatch++;
+			return;
+		}
+		dict_len = h->dict_len;
+	}
+
+	win = s_qoid_win[win_idx];
+
+	rc = tinyd_inflate(data + QOID_HDR_SIZE, size - QOID_HDR_SIZE, win,
+	                   dict_len, cap, &out_len);
+	if (rc != TINYD_OK) {
+		/* A band that does not fit its window is the host's sizing
+		 * mistake, not a corrupt stream: keep the two apart. */
+		if (rc == TINYD_ERR_OVERFLOW)
+			g_decoder_stat_qoid_oversize++;
+		else
+			g_decoder_stat_qoid_bad++;
+		return;
+	}
+
+#if DECODER_STATS
+	g_qoid_stat_inflate_us += time_us_32() - t0;
+	g_qoid_stat_hist_bytes += (u32)dict_len;
+	g_qoid_stat_out_bytes += (u32)out_len;
+#endif
+
+	/* qoi_drawimg() reads this buffer synchronously and writes the panel from
+	 * its own band buffers, so the memo below cannot race an in-flight flush
+	 * (the same reason DECODER_TYPE 5 reuses qoiz_buf every frame). */
+	qoi_drawimg(xs, ys, xe, ye, win + dict_len, (u32)out_len);
+
+	/* The band just decoded becomes this slot's history, whatever it was
+	 * encoded against -- including a keyframe, which is what makes a host
+	 * able to re-sync after any disagreement. */
+	memmove(win, win + dict_len, out_len);
+	s_qoid_hist_len[win_idx] = (u32)out_len;
+	s_qoid_serial[win_idx] = serial;
+	s_qoid_have[win_idx] = 1;
+}
+
+/* PUD_CMD_GET_QOID: which band each window holds.  Separate from the window
+ * search on purpose -- asking is one change, using the answer to pick a
+ * dictionary is another, and doing both at once is how the previous attempt
+ * ended up reverted with 3 bands submitted and none drawn. */
+void qoid_read_state(struct pud_qoid_state *st)
+{
+	int i;
+
+	memset(st, 0, sizeof *st);
+	st->magic = PUD_QOID_MAGIC;
+	st->slots = DECODER_FRAME_SLOTS;
+	st->window = PUD_DELTA_WIN;
+	_Static_assert(DECODER_FRAME_SLOTS <= PUD_QOID_WINDOWS,
+	               "struct pud_qoid_state has to cover every window");
+	for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
+		st->valid[i] = s_qoid_have[i] ? 1 : 0;
+		st->serial[i] = s_qoid_serial[i];
+		st->len[i] = s_qoid_hist_len[i];
+	}
+}
+#else
+/* No dictionary windows in this build, but the query still has to answer
+ * something a host can recognise: magic plus zero slots is that. */
+void qoid_read_state(struct pud_qoid_state *st)
+{
+	memset(st, 0, sizeof *st);
+	st->magic = PUD_QOID_MAGIC;
+}
+#endif /* DECODER_USE_QOID */
 static SemaphoreHandle_t s_decoder_sem;
 
 /* Diagnostics, readable from a debugger: frames seen / dropped / drawn.
@@ -842,6 +1055,17 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 
 	g_decoder_stat_submitted++;
 
+	/*
+	 * Lowest free slot, which is *not* the round-robin rotation DECODER_TYPE 6
+	 * wants: its dictionary lives in the slot, so the host would like to know
+	 * which band is resident where.  Slot k only holds the band submitted
+	 * k % DECODER_FRAME_SLOTS ago while the pipeline is saturated; a host slow
+	 * enough to keep one band in flight puts every band in slot 0 (measured:
+	 * 8 of 15 deltas refused).  A fill/drain cursor pair was tried and shown
+	 * to stall the pipeline under a full-screen load (303 submitted, 300
+	 * drawn, decoder_task blocked), so the mapping has to be fixed on the
+	 * protocol side -- see notes/decoders.md and notes/todo.md item 13.
+	 */
 	for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 		if (!s_frames[i].busy) {
 			s_frames[i].xs = xs;
@@ -849,6 +1073,7 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 			s_frames[i].xe = xe;
 			s_frames[i].ye = ye;
 			s_frames[i].size = size;
+			s_frames[i].serial = g_decoder_stat_submitted - 1;
 			memcpy(s_frames[i].data, data, size);
 			s_frames[i].busy = 1;
 			xSemaphoreGiveFromISR(s_decoder_sem,
@@ -913,7 +1138,7 @@ static void decoder_draw_bootlogo(void)
 		                                    y + rows - 1),
 		            (u8 *)p + start, end - start);
 	}
-#elif DECODER_TYPE == DECODER_USE_QOIZ
+#elif DECODER_TYPE == DECODER_USE_QOIZ || DECODER_TYPE == DECODER_USE_QOID
 	/* stored as plain QOI, see the bootlogo.h include */
 	qoi_drawimg(0, 0, TFT_HOR_RES - 1, TFT_VER_RES - 1, (uint8_t *)bootlogo,
 	            sizeof(bootlogo));
@@ -977,9 +1202,10 @@ static void decoder_task(void *param)
 		 * frame it sends next is already in the new orientation. */
 		pud_params_flush_display();
 
-		decoder_drawimg(s_frames[slot].xs, s_frames[slot].ys,
-		                s_frames[slot].xe, s_frames[slot].ye,
-		                s_frames[slot].data, s_frames[slot].size);
+		decoder_drawimg_slot(s_frames[slot].xs, s_frames[slot].ys,
+		                     s_frames[slot].xe, s_frames[slot].ye,
+		                     s_frames[slot].data, s_frames[slot].size, slot,
+		                     s_frames[slot].serial);
 		s_frames[slot].busy = 0;
 		g_decoder_stat_drawn++;
 		/* A slot is free again: re-arm EP1 if the host's request was
@@ -997,6 +1223,8 @@ static char *decoder_names[] = { "tjpgd", "JPEGDEC", "LZ4",
 #else
 	                         "QOI+deflate (tinfl)"
 #endif
+	,
+	                         "QOI+deflate+dict"
 };
 _Static_assert(DECODER_TYPE < sizeof(decoder_names) / sizeof(decoder_names[0]),
                "decoder_names[] has to cover every DECODER_TYPE");

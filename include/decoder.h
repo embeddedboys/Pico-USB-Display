@@ -39,6 +39,11 @@
  * transfer (tinfl, src/decoders/miniz/) and hands the result to the QOI decoder.
  * Experimental; see notes/decoders.md. */
 #define DECODER_USE_QOIZ 5
+/* QOI, then raw deflate over the QOI stream with the *previous frame's same
+ * band* as preset dictionary -- a cross-frame delta.  The window is the
+ * caller's buffer, decoded by src/decoders/tinyd/ (fixed Huffman + stored
+ * blocks only).  Experimental; see notes/decoders.md. */
+#define DECODER_USE_QOID 6
 
 #ifndef DECODER_TYPE
 #define DECODER_TYPE DECODER_USE_JPEGDEC
@@ -60,6 +65,20 @@ extern void rle_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *rle_data,
                         u32 rle_size);
 extern void qoiz_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoiz_data,
                          u32 qoiz_size);
+/* DECODER_TYPE 6 keeps one dictionary window per frame slot -- the history for
+ * a band is whatever that slot decoded last time -- so unlike every other
+ * decoder here it has to know which slot the band arrived in.  `serial` is the
+ * band's position in the accepted sequence; it is carried in the payload's
+ * sub-header and checked against what the slot holds, because a wrong
+ * dictionary decodes to plausible-looking garbage instead of failing
+ * (notes/decoders.md). */
+extern void qoid_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *qoid_data,
+                         u32 qoid_size, int slot, u32 serial);
+/* Answers PUD_CMD_GET_QOID: which band each dictionary window holds.  Defined
+ * for every build -- a device without windows still has to answer, otherwise a
+ * host cannot tell "no windows" from "command not understood". */
+struct pud_qoid_state;
+extern void qoid_read_state(struct pud_qoid_state *st);
 
 extern void decoder_init(void);
 extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
@@ -80,8 +99,24 @@ extern bool decoder_slot_free(void);
 #define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
 #elif DECODER_TYPE == DECODER_USE_QOIZ
 #define decoder_drawimg(xs, ys, xe, ye, b, l) qoiz_drawimg(xs, ys, xe, ye, b, l)
+#elif DECODER_TYPE == DECODER_USE_QOID
+#define decoder_drawimg(xs, ys, xe, ye, b, l) \
+	qoid_drawimg(xs, ys, xe, ye, b, l, 0, 0)
 #else
 #error "Invalid decoder type selected"
 #endif /* DECODER_TYPE */
+
+/*
+ * The frame task knows which slot a band came out of; only DECODER_TYPE 6 cares
+ * (it keeps its dictionary per slot).  Every other decoder ignores the extra
+ * argument, so this stays a macro rather than a function.
+ */
+#if DECODER_TYPE == DECODER_USE_QOID
+#define decoder_drawimg_slot(xs, ys, xe, ye, b, l, slot, serial) \
+	qoid_drawimg(xs, ys, xe, ye, b, l, slot, serial)
+#else
+#define decoder_drawimg_slot(xs, ys, xe, ye, b, l, slot, serial) \
+	decoder_drawimg(xs, ys, xe, ye, b, l)
+#endif
 
 #endif /* __UDD_DECODER_H */

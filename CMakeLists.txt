@@ -168,6 +168,21 @@ set(DECODER_STATS 0 CACHE STRING "collect g_qoi_stat_* decode/display timings")
 #   cmake .. -DPUD_DECODER_PINGPONG=0
 set(PUD_DECODER_PINGPONG 1 CACHE STRING "overlap QOI/RLE batch decode with the panel write")
 
+# Dictionary window for DECODER_TYPE 6, one per frame slot, laid out
+# [history][output] -- so a single band's QOI stream, and the band it is diffed
+# against, must each fit in half of it.  Measured desktop content puts a band's
+# QOI stream at ~11.7 KB (full screen 93893 B over 8 bands), so 32 KB holds it
+# with margin; a photo band is several times that and is refused (counted, not
+# truncated).  RP2040 has only ~100 KB spare, hence the smaller default:
+#   cmake .. -DDECODER_TYPE=6 -DPUD_DELTA_WIN=16384
+if(PICO_RP2040)
+    set(_pud_delta_win 16384)
+else()
+    set(_pud_delta_win 32768)
+endif()
+set(PUD_DELTA_WIN ${_pud_delta_win} CACHE STRING
+    "DECODER_TYPE 6 dictionary window bytes, per frame slot (history + output)")
+
 # EP1 sink: accept image transfers, count them and throw them away -- no decode,
 # no panel write.  It exists so the USB link can be measured on its own: with it,
 # tests/ep1_out_speed_test.py reports what the link and this interrupt path can
@@ -223,6 +238,7 @@ target_link_libraries(${PROJECT_NAME}
     rle
     miniz
     libdeflate
+    tinyd
     FreeRTOS-Kernel-Heap3
 )
 
@@ -233,6 +249,7 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_TYPE=${DECODER_TYPE})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_INFLATE=${_pud_inflate})
 target_compile_definitions(${PROJECT_NAME} PUBLIC DECODER_STATS=${DECODER_STATS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DECODER_PINGPONG=${PUD_DECODER_PINGPONG})
+target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_DELTA_WIN=${PUD_DELTA_WIN})
 target_compile_definitions(${PROJECT_NAME} PUBLIC PUD_EP1_SINK=${PUD_EP1_SINK})
 target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_BUF_ROWS=${QOI_BUF_ROWS})
 target_compile_definitions(${PROJECT_NAME} PUBLIC QOI_NONCALLBACK=${QOI_NONCALLBACK})
