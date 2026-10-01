@@ -1,1 +1,1 @@
-lib/pico-display-lib/FreeRTOSConfig.h
+include/FreeRTOSConfig.h
