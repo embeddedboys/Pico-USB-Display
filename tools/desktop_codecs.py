@@ -17,9 +17,17 @@ Two halves, both optional:
 
     ./tools/desktop_codecs.py                      # sizes only
     ./tools/desktop_codecs.py --device --codec lz4 # + timing, LZ4 firmware
+    ./tools/desktop_codecs.py --codec qoid         # + the cross-frame table
 
 Requires Pillow; numpy and the lz4 package are optional.  The LZ4 sizes come
 from tools/pudcodec (build it first), so the host side needs no lz4 binding.
+
+`--codec qoid` adds a second host-side table for the experimental cross-frame
+dictionary (DECODER_TYPE 6), which a per-rectangle table cannot express: it
+needs the *previous* frame's band as a dictionary, and whether the device's
+frame slots actually still hold that band.  That table prints payload bytes
+only -- no times -- because the only rate available here is the LINK_BYTES_PER_S
+model, which is exactly what the table above keeps being misread as.
 """
 
 import argparse
@@ -148,8 +156,32 @@ def desktop_frame(dither_wallpaper=False):
     return img
 
 
+def damage(img):
+    """The same desktop one edit later: a clock tick and a retitled window.
+
+    Two small edits in two places is what a partial refresh actually carries,
+    and it is what makes one band a nearly-unchanged one (the panel bar) and
+    another a changed one (the title bar).
+    """
+    out = img.copy()
+    d = ImageDraw.Draw(out)
+    d.rectangle([420, 4, 476, 20], fill=(38, 38, 44))
+    d.text((424, 6), "13:46", font=_font("DejaVuSans.ttf", 11),
+           fill=(225, 225, 230))
+    d.rectangle([144, 180, 332, 202], fill=(74, 78, 88))
+    d.text((148, 184), "Downloads", font=_font("DejaVuSans-Bold.ttf", 11),
+           fill=(240, 240, 245))
+    return out
+
+
 def pixels(image):
     return P.rgb888_to_rgb565(P.load_image(str(image), W, H, fit=False), W, H)
+
+
+def panel_image(image):
+    """`image` at panel size as a PIL image, i.e. something `damage()` can edit."""
+    return Image.frombytes("RGB", (W, H),
+                           P.load_image(str(image), W, H, fit=False))
 
 
 def crop(px, rect):
@@ -187,8 +219,11 @@ def host_table(images, tmp, rate=LINK_BYTES_PER_S, origin="constant"):
     """Payload sizes per codec for every region of each workload image."""
     print("payload bytes per rectangle; the time in brackets is %s at %.3f MB/s"
           % (origin, rate / 1e6))
-    print("%-20s %7s %8s | %8s %8s %8s | %s"
-          % ("region", "pixels", "raw", "qoi", "rle", "lz4", "smallest"))
+    print("qoid is a KEYFRAME (16 B sub-header included): one frame per "
+          "rectangle, so there is no history to preset")
+    print("%-20s %7s %8s | %8s %8s %8s %8s | %s"
+          % ("region", "pixels", "raw", "qoi", "rle", "lz4", "qoid",
+             "smallest"))
     print("-" * 82)
     for label, image in images:
         px = pixels(image)
@@ -199,22 +234,159 @@ def host_table(images, tmp, rate=LINK_BYTES_PER_S, origin="constant"):
             w, h = rect[2] - rect[0], rect[3] - rect[1]
             sizes = {"qoi": len(P.qoi_encode(raw)),
                      "rle": len(P.rle_encode(raw)),
-                     "lz4": lz4_payload(raw, w, h, tmp)}
+                     "lz4": lz4_payload(raw, w, h, tmp),
+                     "qoid": len(P.qoid_encode(raw))}
             sizes = {k: v for k, v in sizes.items() if v is not None}
             if not sizes:
                 continue
             best = min(sizes, key=sizes.get)
             for k, v in sizes.items():
                 total[k] = total.get(k, 0) + v
-            print("%-20s %7d %8d | %8s %8s %8s | %-3s %6d B (%.2f ms)"
+            print("%-20s %7d %8d | %8s %8s %8s %8s | %-3s %6d B (%.2f ms)"
                   % (name, w * h, len(raw),
-                     *[sizes.get(k, "-") for k in ("qoi", "rle", "lz4")],
+                     *[sizes.get(k, "-") for k in ("qoi", "rle", "lz4", "qoid")],
                      best, sizes[best],
                      sizes[best] / rate * 1e3))
         print("   sum over the listed regions (they overlap; for ranking "
               "only): %s" % ", ".join("%s %d B" % (k, v)
                                       for k, v in sorted(total.items())))
         print()
+
+
+#: DECODER_TYPE 6 payloads are deflated against the previous frame's band, so
+#: whether a band can be a delta at all is decided by which band the device's
+#: frame slot still holds (see pud_usb.Display.send_rgb565).  The pair table
+#: below shows both that decision and what the codec would do if every band had
+#: its own history.
+class NullDevice:
+    """A "device" that only records the transfers it would have been sent."""
+
+    def __init__(self):
+        self.writes = []
+
+    def write(self, endpoint, data, timeout=None):
+        self.writes.append(bytes(data))
+
+
+def banded_payloads(writes):
+    """(rect, payload) per captured EP1 transfer, payload size as declared."""
+    out = []
+    for blob in writes:
+        xs, ys, xe, ye, size = P.EP1_HEADER.unpack_from(blob)
+        out.append(((xs, ys, xe, ye),
+                    blob[P.EP1_HEADER_SIZE:P.EP1_HEADER_SIZE + size]))
+    return out
+
+
+def qoid_pair_table(before, after):
+    """The cross-frame dictionary (DECODER_TYPE 6) on two consecutive frames.
+
+    Payload bytes only: the time column of the table above is the
+    LINK_BYTES_PER_S model, and what this table is about is that the payload
+    shrinks -- quoting a modelled time for it would repeat the mistake that
+    column is already famous for.
+
+    The second frame is sent through the real submission path
+    (`Display.send_rgb565(codec="qoid")`) into a recorder, so the numbers are
+    the bytes a host would put on the wire, 16 byte sub-header included, and
+    keyframe-vs-delta is the decision the frame slots actually allow: a delta
+    needs the slot this band lands in to still hold the *same rectangle*
+    `DECODER_FRAME_SLOTS` submissions back, which after three warming frames
+    happens when the region's band count is a multiple of that, and always when
+    the region is the only thing being sent.  The last line is the all-delta
+    case, i.e. what the codec is for but what this banding does not give.
+    """
+    px_a = P.rgb888_to_rgb565(before.tobytes(), W, H)
+    px_b = P.rgb888_to_rgb565(after.tobytes(), W, H)
+    print("cross-frame dictionary (DECODER_TYPE 6), two consecutive frames, "
+          "banded as an RP2350 asks for")
+    print("payload bytes only; the region was already sent %d times, because "
+          "the slots need that long to hold a history"
+          % P.DECODER_FRAME_SLOTS)
+    print("%-20s %5s %9s %9s %9s %4s %5s %8s"
+          % ("region", "bands", "qoi", "qoiz", "qoid", "key", "delta",
+             "vs qoi"))
+    print("-" * 82)
+    total = dict.fromkeys(("bands", "keys", "deltas", "qoi", "qoiz", "qoid",
+                           "key", "delta", "over"), 0)
+    all_delta = 0
+    for label, rect in REGIONS:
+        x0, y0, x1, y1 = rect
+        w, h = x1 - x0, y1 - y0
+        raw_a, raw_b = crop(px_a, rect), crop(px_b, rect)
+
+        dev = NullDevice()
+        disp = P.Display(dev)
+        for _ in range(P.DECODER_FRAME_SLOTS):
+            disp.send_rgb565(raw_a, w, h, xs=x0, ys=y0, codec="qoid")
+        sent = len(dev.writes)
+        disp.send_rgb565(raw_b, w, h, xs=x0, ys=y0, codec="qoid")
+
+        sizes = dict.fromkeys(("qoi", "qoiz", "qoid", "key", "delta"), 0)
+        counts = dict.fromkeys(("key", "delta"), 0)
+        over = 0
+        for (xs, ys, xe, ye), payload in banded_payloads(dev.writes[sent:]):
+            band = (xs, ys, xe + 1, ye + 1)
+            qoi_a = P.qoi_encode(crop(px_a, band))
+            qoi_b = P.qoi_encode(crop(px_b, band))
+            flags = P.QOID_SUBHEADER.unpack_from(payload)[1]
+            kind = "delta" if flags & P.QOID_FLAG_DELTA else "key"
+            sizes["qoi"] += len(qoi_b)
+            sizes["qoiz"] += len(P.qoiz_encode(crop(px_b, band)))
+            sizes["qoid"] += len(payload)
+            sizes[kind] += len(payload)
+            counts[kind] += 1
+            all_delta += len(P.qoid_pack(qoi_b, qoi_a))
+            # the device holds history and output in one window, half each: a
+            # band over that is refused as oversize, keyframe or not
+            over += len(qoi_b) > P.PUD_DELTA_WIN // 2
+
+        if not sizes["qoi"]:
+            continue
+        for k, v in sizes.items():
+            total[k] += v
+        total["bands"] += counts["key"] + counts["delta"]
+        total["keys"] += counts["key"]
+        total["deltas"] += counts["delta"]
+        total["over"] += over
+        print("%-20s %5d %9d %9d %9d %4d %5d %+7.1f%%"
+              % (label + ("*" * min(over, 1)), counts["key"] + counts["delta"],
+                 sizes["qoi"], sizes["qoiz"], sizes["qoid"], counts["key"],
+                 counts["delta"], 100.0 * (sizes["qoid"] / sizes["qoi"] - 1.0)))
+    print("-" * 82)
+    print("%-20s %5d %9d %9d %9d %4d %5d %+7.1f%%"
+          % ("sum (regions overlap)", total["bands"], total["qoi"],
+             total["qoiz"], total["qoid"], total["keys"], total["deltas"],
+             100.0 * (total["qoid"] / total["qoi"] - 1.0)))
+    print("%d of the %d bands were deltas (%d B); the other %d had to be "
+          "keyframes (%d B):" % (total["deltas"], total["bands"],
+                                 total["delta"], total["keys"], total["key"]))
+    print("  a band is a keyframe only when no band is resident yet, when the "
+          "band it names")
+    print("  has been evicted from every window, or when its QOI is over half a "
+          "window.  The")
+    print("  device searches its %d windows for whatever band the payload names, "
+          "so the dictio-"
+          % P.DECODER_FRAME_SLOTS)
+    print("  nary does not have to be the same rectangle -- a vertically "
+          "adjacent band is used")
+    print("  when the same one is not resident, which is the only way a "
+          "full-screen resend gets")
+    print("  any delta at all.  The vs-qoi column of those rows is Z_FIXED "
+          "deflate without a")
+    print("  dictionary, i.e. qoiz less the dynamic Huffman.")
+    print("if every band had its history in its slot: qoi %d B -> qoid %d B "
+          "(%+.1f%%) -- what the codec is" % (total["qoi"], all_delta,
+                                               100.0 * (all_delta / total["qoi"]
+                                                        - 1.0)))
+    print("  for, but not what this banding gives.")
+    if total["over"]:
+        print("* %d of the frame-2 bands have a QOI over the %d B half window "
+              "(PUD_DELTA_WIN / 2): the device"
+              % (total["over"], P.PUD_DELTA_WIN // 2))
+        print("  refuses those as oversize -- qoid_oversize, no truncation -- "
+              "so that region of the panel stays stale.")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +475,9 @@ def main():
     ap.add_argument("--device", action="store_true",
                     help="also measure on the device (it must be built for "
                          "--codec)")
-    ap.add_argument("--codec", default="qoi", choices=sorted(P.ENCODERS))
+    ap.add_argument("--codec", default="qoi", choices=sorted(P.ENCODERS),
+                    help="codec the device is built for; qoid also prints the "
+                         "host-side cross-frame table (default qoi)")
     ap.add_argument("--image", default=None,
                     help="use this png as the workload (default: generate a "
                          "synthetic desktop)")
@@ -345,6 +519,11 @@ def main():
     elif args.device:
         rate, origin = calibrate_link(pixels(images[0][1]), args.codec), "measured in this run"
     host_table(images, tmp, rate, origin)
+    if args.codec == "qoid":
+        # the cross-frame codec needs a second frame, which a per-rectangle
+        # payload table cannot express -- and no time column, see the docstring
+        base = panel_image(images[0][1])
+        qoid_pair_table(base, damage(base))
     if args.device:
         device_table_px(args, pixels(images[0][1]))
     return 0
