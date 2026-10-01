@@ -49,6 +49,15 @@ typedef signed int s32;
 #define PUD_CMD_GET_CAPS 0x02
 #define PUD_CMD_SET_PARAM 0x03 /* control OUT (REQ_SET_PARAM), struct pud_params */
 #define PUD_CMD_GET_PARAM 0x04 /* EP2 IN, struct pud_param_state */
+/* EP2 IN, struct pud_qoid_state: which band each DECODER_TYPE 6 dictionary
+ * window holds.  A new command rather than a field appended to
+ * struct pud_caps -- the caps struct is a protocol field the driver already
+ * parses at a fixed size, and an unknown command is simply never sent.
+ *
+ * NOT ANSWERED YET: the handler existed and hung the pipeline on hardware, so
+ * it was pulled; the shapes are kept because they are the design.  See
+ * notes/todo.md item 13 before wiring it up. */
+#define PUD_CMD_GET_QOID 0x05
 
 /* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The
  * host needs frame_max to size the bands it splits a rectangle into: the same
@@ -158,6 +167,30 @@ struct pud_ep1_header {
 	u16 xe;
 	u16 ye;
 	u32 size; /* payload bytes that follow */
+};
+
+/* DECODER_TYPE 6 keeps one dictionary window per frame slot, and which band a
+ * window holds depends on how full the pipeline was when bands arrived: the
+ * host cannot derive it from its own send count (measured: with a host slow
+ * enough to keep one band in flight, every band lands in the same slot, and a
+ * host that assumed round robin had 8 of 15 deltas refused).  So it asks.
+ *
+ * A DELTA names the band its dictionary was built from, and the device decodes
+ * into whichever window holds that band, so this answer is what tells a host
+ * which history it may still use. */
+#define PUD_QOID_MAGIC 0x51445550u /* 'PUDQ' */
+#define PUD_QOID_WINDOWS 4
+struct pud_qoid_state {
+	u32 magic;
+	u32 slots; /* how many entries below are in use */
+	u32 serial[PUD_QOID_WINDOWS]; /* band the window holds */
+	u32 len[PUD_QOID_WINDOWS]; /* that band's QOI length */
+	u32 valid[PUD_QOID_WINDOWS]; /* 1 when the window holds a band */
+	/* PUD_DELTA_WIN: how big each window is.  The host needs it to know
+	 * whether a band fits (a band's QOI over half of it is refused as
+	 * oversize), and it is a build choice -- 32 KB on RP2350, 16 KB on
+	 * RP2040 -- so a host that assumes one number breaks on the other. */
+	u32 window;
 };
 
 struct disp_data {

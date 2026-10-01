@@ -456,6 +456,15 @@ uint32_t usbd_vendor_ep2_bulk_in_fsm(uint8_t cmd, uint32_t len)
 		memcpy(ep2_write_buffer, &caps, len);
 		break;
 	}
+	case PUD_CMD_GET_QOID: {
+		struct pud_qoid_state st;
+
+		qoid_read_state(&st);
+		if (len > sizeof(st))
+			len = sizeof(st);
+		memcpy(ep2_write_buffer, &st, len);
+		break;
+	}
 	case PUD_CMD_GET_PARAM: {
 		struct pud_param_state st;
 
