@@ -38,6 +38,7 @@ claim the interface. Install the bundled udev rule once to avoid needing root:
     sudo udevadm control --reload-rules && sudo udevadm trigger
 '''
 
+import collections
 import os
 import struct
 import subprocess
@@ -72,6 +73,14 @@ REQ_SET_PARAM = 0x06
 
 CMD_GET_SN = 0x01
 CMD_GET_CAPS = 0x02
+#: Which band each DECODER_TYPE 6 dictionary window holds (see the firmware's
+#: struct pud_qoid_state).  A command of its own rather than a field added to
+#: the caps struct: that one is a protocol field the driver parses at a fixed
+#: size, and an unknown command is simply never sent.
+CMD_GET_QOID = 0x05
+#: magic, slots, 4x serial, 4x len, 4x valid, window = 15 u32,
+#: matching struct pud_qoid_state in include/pud.h
+QOID_STATE = struct.Struct("<" + "I" * 15)
 CMD_SET_PARAM = 0x03
 CMD_GET_PARAM = 0x04
 
@@ -383,6 +392,116 @@ def qoiz_encode(pixels, level=6):
     return comp.compress(qoi_encode(pixels)) + comp.flush()
 
 
+# ---------------------------------------------------------------------------
+# RGB565 QOI + cross-frame dictionary deflate (DECODER_TYPE 6)
+#
+# The sub-header rides *inside* the EP1 payload, i.e. after the 12 byte
+# `struct pud_ep1_header`, so no shared protocol field changes:
+#
+#      0  u32  magic        0x44445550, which is 'P','U','D','D' -- the bytes
+#                           on the wire are 50 55 44 44 (little endian)
+#      4  u16  flags        bit0 DELTA (the deflate stream had a preset dict)
+#                           bit1 KEYFRAME (this band resets the slot history)
+#      6  u16  reserved     0
+#      8  u32  dict_serial  DELTA: the accepted-strip serial the slot's history
+#                           was recorded with
+#     12  u32  dict_len     DELTA: history bytes the encoder used as zdict
+#     16  ...  raw deflate  stream (RFC 1951, no zlib header, fixed Huffman)
+#
+# 16 bytes, 4 byte aligned, every multi-byte field little endian.  `size` in
+# `struct pud_ep1_header` is the payload size *including* this sub-header.
+# ---------------------------------------------------------------------------
+
+QOID_MAGIC = 0x44445550
+QOID_FLAG_DELTA = 0x0001
+QOID_FLAG_KEYFRAME = 0x0002
+QOID_SUBHEADER = struct.Struct("<IHHII")
+QOID_SUBHEADER_SIZE = QOID_SUBHEADER.size
+#: magic of the PUD_CMD_GET_QOID answer (PUD_QOID_MAGIC in the firmware), which
+#: is a different word from the sub-header magic above
+QOID_STATE_MAGIC = 0x51445550
+QOID_WINDOWS = 4
+
+#: Per frame slot, and split in half: history | output.  A cache variable in
+#: the firmware (PUD_DELTA_WIN, 32 KB on RP2350 / 16 KB on RP2040), so a band's
+#: QOI -- and the history it is deflated against -- has to fit in half of it.
+#: `Display.delta_win` carries the value the host builds against.
+PUD_DELTA_WIN = 32 * 1024
+
+#: Device frame slots (DECODER_FRAME_SLOTS in the firmware).  Slots are handed
+#: out round-robin, so the k-th submission of a session lands in slot
+#: k % DECODER_FRAME_SLOTS and finds the band submitted that many submissions
+#: earlier.  `Display.frame_slots` carries it.
+DECODER_FRAME_SLOTS = 3
+
+
+def qoid_pack(qoi, history=None, dict_serial=0, level=6):
+    """Frame one QOI stream as a `DECODER_TYPE 6` payload.
+
+    A 16 byte sub-header, then a raw deflate stream (RFC 1951, no zlib header)
+    over `qoi`.  The strategy is fixed Huffman (`Z_FIXED`) because that is the
+    format the device implements: `tinyd` has stored + fixed Huffman and
+    *refuses* dynamic tables instead of decoding them wrong.
+
+    `history` is the QOI stream of the same band as the previous frame left it,
+    and presets the deflate dictionary -- this is the whole point of the codec.
+    `dict_serial` is the accepted-strip serial the host believes that history
+    was recorded with; the device drops a DELTA whose serial or dict_len does
+    not match the slot, because a wrong dictionary decodes to *wrong pixels*
+    with rc 0 rather than failing (see notes/decoders.md).
+
+    Without a history this is a KEYFRAME: dict_len 0, serial irrelevant.  The
+    device stores whatever it decodes as the slot's new history either way, so
+    a keyframe is always legal and is also how a host recovers a lost ring.
+
+    Works on QOI bytes rather than pixels so the caller can keep them for the
+    next frame's dictionary without encoding the band twice; `qoid_encode` is
+    the pixels-in version.
+    """
+    import zlib
+
+    if history:
+        flags, dict_len = QOID_FLAG_DELTA, len(history)
+    else:
+        flags, dict_len, dict_serial = QOID_FLAG_KEYFRAME, 0, 0
+
+    comp = zlib.compressobj(level, zlib.DEFLATED, -15, 8, zlib.Z_FIXED,
+                            zdict=history or b"")
+    return (QOID_SUBHEADER.pack(QOID_MAGIC, flags, 0, dict_serial, dict_len)
+            + comp.compress(qoi) + comp.flush())
+
+
+def qoid_encode(pixels, history=None, dict_serial=0, level=6):
+    """QOI, then raw deflate against a *cross-frame* dictionary
+    (`DECODER_TYPE 6`).
+
+    Frame-internal deflate (see `qoiz_encode`) cannot see what the previous
+    frame already put on the panel, and that is most of a desktop's redundancy:
+    the same glyph, the same unchanged UI, the wallpaper behind a moved window.
+    QOI encodes the band, then the band is deflated with the *previous frame's
+    QOI for the same band* preset as the dictionary.  Measured host side on the
+    synthetic desktop (notes/decoders.md, "跨帧字典"):
+
+      dirty bands, larger change    QOI 32744 B -> 18939 B   -42.2%
+      dirty bands, small change     QOI 32744 B ->  6899 B   -78.9%
+      one UI element in one band    QOI 11270 B ->  3464 B   -69.0%
+
+    The gain is proportional to how much of the band did not change, which is
+    exactly the shape of a partial refresh.  The cost is on the device, which
+    is why this codec only makes sense on a chip whose CPU is idle: the slot
+    keeps the last band's QOI and the inflate is preset with it, measured at
+    15.9 cycles per output byte at 150~384 MHz (flat in clock), i.e. ~8 ms for
+    a full 480x320 frame at 225 MHz -- hidden behind a 45~74 ms transfer.
+
+    `history` is that dictionary: the QOI bytes the device's frame slot still
+    holds.  It is *state*, so `Display.send_rgb565(codec="qoid")` owns it (one
+    history per frame slot, slots round-robin); with no history -- including
+    the generic `ENCODERS["qoid"](band)` call, where one band cannot know what
+    the slot holds -- this is a keyframe.
+    """
+    return qoid_pack(qoi_encode(pixels), history, dict_serial, level)
+
+
 #: The encoders a host may send with.  The device has to be built for the same
 #: one (DECODER_TYPE); `Display.query_caps()` asks which.
 ENCODERS = {
@@ -390,19 +509,23 @@ ENCODERS = {
     "rle": rle_encode,
     "lz4": lz4_encode,
     "qoiz": qoiz_encode,
+    "qoid": qoid_encode,
 }
 
 #: The DECODER_TYPE each of those needs on the device -- a protocol field
 #: (`PUD_CMD_GET_CAPS` reports the device's own, see notes/usb-protocol.md).
 #: 0 is tjpgd, 1 is JPEGDEC (both JPEG, the host only ever sends whole frames);
 #: 3 QOI and 4 RLE are the default paths, 2 is LZ4 (banded, see lz4_encode),
-#: 5 is QOI + deflate (experimental, see qoiz_encode).
+#: 5 is QOI + deflate (experimental, see qoiz_encode), 6 is QOI + a cross-frame
+#: dictionary (experimental, see qoid_encode -- it needs per-slot host state,
+#: so it is not usable through send_raw()).
 DECODER_TYPES = {
     "jpeg": 1,
     "lz4": 2,
     "qoi": 3,
     "rle": 4,
     "qoiz": 5,  # experimental: QOI + raw deflate
+    "qoid": 6,  # experimental: QOI + cross-frame dictionary deflate
 }
 
 
@@ -653,7 +776,8 @@ def open_device():
 class Display:
     """A claimed device; use as a context manager."""
 
-    def __init__(self, dev, width=480, height=320):
+    def __init__(self, dev, width=480, height=320, delta_win=PUD_DELTA_WIN,
+                 frame_slots=DECODER_FRAME_SLOTS):
         import usb.core
         import usb.util
 
@@ -671,6 +795,17 @@ class Display:
         self.frame_max = USB_TRANS_MAX_SIZE
         self.band_pixels = PUD_MAX_BAND_PIXELS
         self.decoder_type = None
+
+        # DECODER_TYPE 6 (qoid) state.  The dictionary lives on the device, one
+        # per frame slot, so the host has to mirror which band each slot holds:
+        # `_qoid_ring` is the last `frame_slots` submissions (rectangle, QOI
+        # bytes, serial) and `qoid_serial` counts the bands accepted.  Both are
+        # session state -- only send_rgb565(codec="qoid") keeps them, so mixing
+        # send_raw() in between desynchronizes the serial and the device starts
+        # dropping the deltas (visible in its counters, not a corrupt picture).
+        self.delta_win = delta_win
+        self.frame_slots = max(1, frame_slots)
+        self.reset_qoid_state()
 
     # -- lifecycle --------------------------------------------------------
     def close(self):
@@ -748,6 +883,12 @@ class Display:
           qoi / rle   the band is one QOI/RLE image
           lz4         the band is one LZ4 block; an LZ4 block cannot be decoded
                       in pieces, so the device holds exactly one band at a time
+          qoid        the band is one QOI stream deflated against the frame
+                      slot's cross-frame dictionary (see qoid_encode), so this
+                      method also owns the slot bookkeeping: the first
+                      `frame_slots` submissions of a session are keyframes, and
+                      later ones are deltas only if the slot still holds this
+                      very rectangle from `frame_slots` submissions ago
 
         Returns (bands, payload_bytes, seconds).
         """
@@ -756,6 +897,14 @@ class Display:
         except KeyError:
             raise PudError("unknown codec %r (have: %s)"
                            % (codec, ", ".join(sorted(ENCODERS))))
+
+        if codec == "qoid" and self.decoder_type not in (None,
+                                                         DECODER_TYPES["qoid"]):
+            # Every other codec's stream is self-describing to its own decoder;
+            # a DECODER_TYPE 6 payload is not, and a QOI decoder fed the 16 byte
+            # sub-header draws garbage. Refuse instead of corrupting the panel.
+            raise PudError("device reports decoder_type=%s, qoid needs %d"
+                           % (self.decoder_type, DECODER_TYPES["qoid"]))
 
         timeout = timeout or DEFAULT_TIMEOUT_MS
         self._check_rect(xs, ys, xs + width - 1, ys + height - 1)
@@ -769,16 +918,193 @@ class Display:
             bh = min(rows, height - y)
             start = y * width * 2
             band = rgb565[start:start + bh * width * 2]
-            payload = encode(band)
-            if len(payload) > limit:
-                raise PudError("band of %d bytes exceeds the %d byte limit"
-                               % (len(payload), limit))
-            self._send_rect(xs, ys + y, xs + width - 1, ys + y + bh - 1,
-                            payload, timeout)
+            rect = (xs, ys + y, xs + width - 1, ys + y + bh - 1)
+            qoi = None
+            if codec == "qoid":
+                # The payload depends on what the device's slot still holds, so
+                # it is built here with the ring and the serial in hand.
+                payload, qoi = self._qoid_band(band, rect, limit)
+            else:
+                payload = encode(band)
+                if len(payload) > limit:
+                    raise PudError("band of %d bytes exceeds the %d byte limit"
+                                   % (len(payload), limit))
+            self._send_rect(rect[0], rect[1], rect[2], rect[3], payload,
+                            timeout)
+            if qoi is not None:
+                self._qoid_accept(rect, qoi)
             total += len(payload)
             bands += 1
 
         return bands, total, time.perf_counter() - t0
+
+    # -- DECODER_TYPE 6 (qoid): the cross-frame dictionary ------------------
+    #
+    # The dictionary is device state, one per frame slot, and slots are handed
+    # out round-robin: the k-th band of a session lands in slot
+    # k % frame_slots, which still holds the band submitted `frame_slots`
+    # submissions earlier.  The host mirrors that with `_qoid_ring`, so it can
+    # only build a delta for a band whose history it still has, for the same
+    # rectangle, and only while its own count of accepted bands still lines up
+    # with the device's.  Whenever it cannot, the band goes as a keyframe,
+    # which is always legal and resets the slot.
+    #
+    # `qoid_serial` counts the bands accepted in this session, which is also
+    # the serial the device records for the band being sent.  It is only right
+    # for a fresh device session: after a device reset the host is off by
+    # whatever the device lost, the deltas it sends carry a serial and a
+    # dict_len the slot does not have, and the device drops them as
+    # g_decoder_stat_qoid_mismatch -- a countable, visible failure rather than
+    # a corrupted picture.  Recovery is to keyframe from a known baseline:
+    # reset_qoid_state() plus a device reset (the spec's one-off "align the
+    # counter by control request" is not in the protocol yet, so the host has
+    # nothing better to align against).
+
+    def reset_qoid_state(self):
+        """Forget the device's frame-slot history for `DECODER_TYPE 6`.
+
+        The device counts accepted bands from its own boot and keeps the last
+        band per slot, so this is what puts the host back on that baseline: the
+        next `frame_slots` submissions go as keyframes.  Call it after a device
+        reset (or before sending a second, unrelated session over one claim).
+        """
+        self.qoid_serial = 0
+        self._qoid_ring = collections.deque(maxlen=16)
+        self._qoid_oversize_warned = False
+
+    def query_qoid_state(self, timeout=None):
+        """Which band each dictionary window holds (``PUD_CMD_GET_QOID``).
+
+        Returns ``{serial: qoi_length}`` for the windows that hold a band, or
+        None when the device does not answer (an older firmware leaves its
+        previous answer in the buffer, so the magic decides, not the length).
+        """
+        if getattr(self, "dev", None) is None:
+            # no device behind this Display (the offline self-test drives the
+            # band path directly): nothing is resident, so say so and let the
+            # caller send a keyframe rather than guess
+            return None
+        timeout = timeout or DEFAULT_TIMEOUT_MS
+        self.dev.ctrl_transfer(
+            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
+            struct.pack("<HH", CMD_GET_QOID, QOID_STATE.size))
+        raw = bytes(self.dev.read(EP2_IN_ADDR, QOID_STATE.size,
+                                  timeout=timeout))
+        if len(raw) < QOID_STATE.size:
+            return None
+        fields = QOID_STATE.unpack(raw)
+        if fields[0] != QOID_STATE_MAGIC:
+            return None
+        slots = min(fields[1], QOID_WINDOWS)
+        serial, length, valid = fields[2:2 + slots], \
+            fields[6:6 + slots], fields[10:10 + slots]
+        window = fields[14]
+        if window:
+            # stop guessing the window size: it is a build choice (32 KB on
+            # RP2350, 16 KB on RP2040) and a band larger than half of it is
+            # refused by the device as oversize, i.e. that part of the panel
+            # silently stops updating
+            self.delta_win = window
+        return dict((serial[i], length[i]) for i in range(slots)
+                    if valid[i])
+
+    def _qoid_history(self, rect):
+        """(qoi, serial) to prime the encoder with, or None for a keyframe.
+
+        This predicts the window rather than asking: the device checks a delta
+        against this band's own slot, which holds the band submitted
+        `frame_slots` ago only while the pipeline is saturated (measured: with a
+        slow host every band lands in one slot, and 8 of 15 deltas were
+        refused).  A wrong guess is refused and counted by the device -- never
+        painted wrong -- but that band does not update, so this is the weaker
+        mode.
+
+        `query_qoid_state()` is what replaces the guess, and it is deliberately
+        *not* called from here yet: it is a control transfer, and interleaving
+        one between the bands of a frame is a change to the data path that has
+        to be shown harmless on its own first (notes/todo.md item 13).
+        """
+        # The newest band with this rectangle is both the strongest dictionary
+        # (least has changed since) and the one most likely to still be in a
+        # window, since only the last `frame_slots` accepted bands can be.  The
+        # old rule named whatever was exactly `frame_slots` submissions back --
+        # the round-robin window -- which a slow host never fills that way.
+        # A dictionary has to be a band the decoder has *finished*, or the
+        # device's windows do not hold it yet and the delta is refused -- which
+        # costs that band its update.  Decoding is asynchronous and one task
+        # deep, so a band is safe at exactly `frame_slots` submissions back:
+        # flow control lets at most that many be in flight, and that band is
+        # then both decoded and the oldest of the resident set.  Measured: with
+        # the immediately previous band named instead, a host fast enough to
+        # outrun the decoder (a delta is 0.18 ms on the wire) had 17 of 20
+        # deltas refused.
+        # `frame_slots` back is the best any fixed distance can do, and it is
+        # not good enough: there the band may still be finishing (measured 5 of
+        # 20 deltas refused by a host that outran the decoder), while one
+        # further back is often already evicted (8 of 20).  With `frame_slots`
+        # windows and a `frame_slots` deep pipeline the two windows do not
+        # overlap, so residency cannot be predicted at all -- it has to be
+        # asked for (query_qoid_state) or avoided (a host that paces itself:
+        # 12 of 12 accepted with 50 ms between bands, 96 of 96 on a full-screen
+        # resend).  See notes/todo.md item 13.
+        safe = self.qoid_serial - self.frame_slots
+        fallback = None
+        for band_rect, qoi, serial in reversed(self._qoid_ring):
+            if serial > safe:
+                continue            # may still be in flight: not in a window yet
+            if band_rect == rect:
+                return qoi, serial  # newest eligible band with this rectangle
+            if fallback is None:
+                fallback = (qoi, serial)    # newest eligible band at all
+        # Naming a different rectangle is legitimate: the device searches its
+        # windows and checks the length, so correctness does not depend on the
+        # rectangles matching -- only the compression ratio does, and a
+        # vertically adjacent band shares a desktop's background and chrome.
+        # This is also the only way a full-screen resend gets a dictionary at
+        # all, since every band in it is a different rectangle.
+        return fallback
+
+    def _qoid_band(self, band, rect, limit):
+        """(payload, qoi) for one band: a DELTA when the slot's history is
+        usable, a KEYFRAME otherwise.
+
+        `qoi` is handed back so the caller can record it as a slot history once
+        the transfer has actually gone out (see _qoid_accept).  A payload that
+        does not fit the transfer limit is never truncated: the delta falls
+        back to a keyframe, and a keyframe that does not fit is an error.
+        """
+        qoi = qoi_encode(band)
+        history = self._qoid_history(rect)
+        half = self.delta_win // 2
+        if history is not None and (len(history[0]) > half or len(qoi) > half):
+            # The window is history | output, half each, so both sides of a
+            # delta have to fit in half of it; the device drops the band as
+            # oversize otherwise (g_decoder_stat_delta_oversize, no truncation).
+            history = None
+        if history is not None:
+            payload = qoid_pack(qoi, history[0], history[1])
+            if len(payload) <= limit:
+                return payload, qoi
+            # too big on the wire: the keyframe below is the smaller one anyway
+        payload = qoid_pack(qoi)
+        if len(payload) > limit:
+            raise PudError(
+                "band QOI of %d bytes is %d bytes with the DECODER_TYPE 6 "
+                "sub-header, over the %d byte limit this device accepts"
+                % (len(qoi), len(payload), limit))
+        if len(qoi) > half and not self._qoid_oversize_warned:
+            # Photo content: the band is fine on the link but the device cannot
+            # hold it. Say so once -- it drops it as oversize, invisibly.
+            self._qoid_oversize_warned = True
+            sys.stderr.write(
+                "qoid: band QOI of %d bytes exceeds the %d byte half window, "
+                "the device will drop it as oversize\n" % (len(qoi), half))
+        return payload, qoi
+
+    def _qoid_accept(self, rect, qoi):
+        """Record a band the device has accepted, with the serial it gets."""
+        self._qoid_ring.append((rect, qoi, self.qoid_serial))
+        self.qoid_serial += 1
 
     def send_full(self, rgb565, **kw):
         return self.send_rgb565(rgb565, self.width, self.height, **kw)
@@ -905,6 +1231,180 @@ _RLE_REFERENCE_STREAM = bytes.fromhex(
 _REFERENCE_STREAM = bytes.fromhex(
     "7135363508000000fe34126b6bc1fe00f876270000000000000001")
 
+#: DECODER_TYPE 6 sub-header vectors -- the 16 bytes the device parses, with
+#: `_REFERENCE_STREAM` (27 bytes) as the history, so the magic, the two flag
+#: bits, the reserved field, the endianness of both u32 fields and the fact
+#: that dict_len is the *history* length are pinned rather than assumed.  The
+#: deflate stream behind them is zlib's output and is not pinned.
+_REFERENCE_QOID_KEYFRAME = bytes.fromhex("50554444020000000000000000000000")
+_REFERENCE_QOID_DELTA = bytes.fromhex("5055444401000000050000001b000000")
+
+
+def _selftest_qoid():
+    """`DECODER_TYPE 6` (QOI + cross-frame dictionary deflate), no hardware.
+
+    The format rests on four things, and all four are checked here: a keyframe
+    round trips, a delta round trips through `decompressobj(-15, zdict=...)`, a
+    delta decoded against the *wrong* history does not come back (zlib may
+    refuse it outright, but `tinyd` on the device decodes garbage with rc 0 --
+    which is why the firmware has to check the serial and the length itself),
+    and the slot arithmetic keyframes exactly the bands whose history the host
+    cannot know.  The last part is replayed through the real band path, ending
+    in a simulated device that holds the slot histories and inflates with them.
+    """
+    import zlib
+
+    if QOID_STATE.size != 60:
+        raise PudError("the PUD_CMD_GET_QOID answer is %d bytes here and 60 in "
+                       "the firmware" % QOID_STATE.size)
+    if QOID_SUBHEADER.size != 16:
+        raise PudError("qoid sub-header is %d bytes, the format says 16"
+                       % QOID_SUBHEADER.size)
+
+    keyframe = qoid_pack(_REFERENCE_STREAM)
+    if keyframe[:QOID_SUBHEADER_SIZE] != _REFERENCE_QOID_KEYFRAME:
+        raise PudError("qoid keyframe sub-header mismatch:\n  got %s\n  want %s"
+                       % (keyframe[:QOID_SUBHEADER_SIZE].hex(),
+                          _REFERENCE_QOID_KEYFRAME.hex()))
+    delta = qoid_pack(_REFERENCE_STREAM, _REFERENCE_STREAM, dict_serial=5)
+    if delta[:QOID_SUBHEADER_SIZE] != _REFERENCE_QOID_DELTA:
+        raise PudError("qoid delta sub-header mismatch:\n  got %s\n  want %s"
+                       % (delta[:QOID_SUBHEADER_SIZE].hex(),
+                          _REFERENCE_QOID_DELTA.hex()))
+
+    # a band no frame-local codec can squeeze -- an LCG stands in for the photo
+    # or text content that is incompressible inside one band -- of which the
+    # next frame changed 24 pixels: the cross-frame case, where only the
+    # dictionary helps
+    band = []
+    seed = 0x1234
+    for _ in range(224):
+        seed = (seed * 1103515245 + 12345) & 0xFFFFFFFF
+        band.append((seed >> 11) & 0xFFFF)
+    later = band[:-24] + [0xF81F] * 24
+    qoi_a, qoi_b = qoi_encode(band), qoi_encode(later)
+    kf = qoid_pack(qoi_b)
+    if zlib.decompress(kf[QOID_SUBHEADER_SIZE:], -15) != qoi_b:
+        raise PudError("qoid keyframe does not round trip to the QOI stream")
+    df = qoid_pack(qoi_b, qoi_a, dict_serial=1)
+    if zlib.decompressobj(-15, zdict=qoi_a).decompress(
+            df[QOID_SUBHEADER_SIZE:]) != qoi_b:
+        raise PudError("qoid delta does not round trip against its history")
+    if len(df) >= len(kf):
+        raise PudError("qoid delta (%d B) is not smaller than the keyframe "
+                       "(%d B) on a band that barely changed"
+                       % (len(df), len(kf)))
+
+    # the wrong history must not decode to the right bytes
+    try:
+        wrong = zlib.decompressobj(-15, zdict=qoi_encode([0x001F] * len(band)))
+        wrong = wrong.decompress(df[QOID_SUBHEADER_SIZE:])
+    except zlib.error:
+        wrong = None       # zlib gives up; the device's tinyd does not
+    if wrong == qoi_b:
+        raise PudError("a qoid delta decoded against the wrong history came "
+                       "out identical -- the firmware's serial/dict_len check "
+                       "would not be load-bearing")
+
+    # the band path itself: two frames of DECODER_FRAME_SLOTS bands, so every
+    # slot gets the same rectangle back on the second frame
+    disp = Display.__new__(Display)
+    disp.delta_win = PUD_DELTA_WIN
+    disp.frame_slots = DECODER_FRAME_SLOTS
+    disp.reset_qoid_state()
+    limit = USB_TRANS_MAX_SIZE - EP1_HEADER_SIZE
+    band_px = 24
+    rects = [(0, y, band_px - 1, y) for y in range(DECODER_FRAME_SLOTS)]
+    first = [[0x1000 + y * 0x111] * band_px for y in range(len(rects))]
+    second = [row[:] for row in first]
+    second[1][-4:] = [0x2222] * 4
+    slots = [None] * DECODER_FRAME_SLOTS      # (serial, history) per window
+    # stand in for PUD_CMD_GET_QOID: the host cannot know residency on its own,
+    # which is the whole reason the query exists
+    disp.query_qoid_state = lambda timeout=None: dict(
+        (w[0], len(w[1])) for w in slots if w)
+    accepted = 0
+    counts = {QOID_FLAG_KEYFRAME: 0, QOID_FLAG_DELTA: 0}
+    for frame in (first, second):
+        for rect, pixels_ in zip(rects, frame):
+            raw = struct.pack("<%dH" % band_px, *pixels_)
+            payload, qoi = disp._qoid_band(raw, rect, limit)
+            magic, flags, _reserved, serial, dict_len = \
+                QOID_SUBHEADER.unpack_from(payload)
+            if magic != QOID_MAGIC:
+                raise PudError("qoid payload magic is %08x, want %08x"
+                               % (magic, QOID_MAGIC))
+            counts[flags] = counts.get(flags, 0) + 1
+            # the firmware searches its windows for the band the payload names
+            held = None
+            if not (flags & QOID_FLAG_KEYFRAME):
+                for w in slots:
+                    if w and w[0] == serial and len(w[1]) == dict_len:
+                        held = w
+                        break
+            if flags & QOID_FLAG_KEYFRAME:
+                if dict_len or serial:
+                    raise PudError("qoid keyframe carries dict_len %d, serial %d"
+                                   % (dict_len, serial))
+                history = b""
+            else:
+                # what the firmware checks before it inflates
+                if held is None:
+                    raise PudError(
+                        "qoid delta at submission %d names band %d, which no "
+                        "window holds" % (accepted, serial))
+                history = held[1]
+            got = zlib.decompressobj(-15, zdict=history).decompress(
+                payload[QOID_SUBHEADER_SIZE:])
+            if got != qoi:
+                raise PudError("qoid band %s did not decode back to the QOI "
+                               "bytes it was built from" % (rect,))
+            # a delta leaves its history in the window it decoded against, a
+            # keyframe in this band's own frame slot
+            if held is not None:
+                slots[slots.index(held)] = (accepted, qoi)
+            else:
+                slots[accepted % DECODER_FRAME_SLOTS] = (accepted, qoi)
+            disp._qoid_accept(rect, qoi)
+            accepted += 1
+    # The first band has nothing resident to diff against, so it is a keyframe;
+    # after that a band may diff against any resident band, *including one from a
+    # different rectangle* -- which is legitimate (correctness comes from the
+    # serial and length the device checks) and is what lets a full-screen resend
+    # use a dictionary at all.  So the counts are bounded, not fixed.
+    if not counts[QOID_FLAG_KEYFRAME] or \
+            counts[QOID_FLAG_DELTA] < DECODER_FRAME_SLOTS:
+        raise PudError("qoid sent %d keyframes and %d deltas over two frames "
+                       "of %d bands, want >=1 and >=%d"
+                       % (counts[QOID_FLAG_KEYFRAME], counts[QOID_FLAG_DELTA],
+                          DECODER_FRAME_SLOTS, DECODER_FRAME_SLOTS))
+
+    # nothing resident, and a band too big for half the window, both have to be
+    # keyframes; a rectangle nobody holds is no longer in that list, because the
+    # dictionary only has to be a band the device still has
+    raw = struct.pack("<%dH" % band_px, *first[0])
+    disp.reset_qoid_state()         # nothing sent yet, so nothing is resident
+    cold, _qoi = disp._qoid_band(raw, rects[0], limit)
+    if QOID_SUBHEADER.unpack_from(cold)[1] != QOID_FLAG_KEYFRAME:
+        raise PudError("qoid sent a delta with nothing resident to diff against")
+    disp._qoid_oversize_warned = True    # this is what a real session prints
+    disp.delta_win = 8                   # half a window is smaller than a band
+    big, _qoi = disp._qoid_band(raw, rects[0], limit)
+    if QOID_SUBHEADER.unpack_from(big)[1] != QOID_FLAG_KEYFRAME:
+        raise PudError("qoid sent a delta for a band that cannot fit the "
+                       "half window the device keeps its history in")
+
+    print("  QOI+dict (%d) sub-header matches the reference bytes (keyframe "
+          "and delta)" % DECODER_TYPES["qoid"])
+    print("  QOI+dict delta %d B vs keyframe %d B (QOI %d B) on a band that "
+          "barely changed, both round trip" % (len(df), len(kf), len(qoi_b)))
+    print("  QOI+dict wrong-history decode is not the band (the device's "
+          "serial/dict_len check is load-bearing)")
+    print("  QOI+dict slots: %d keyframes then %d deltas over two frames of "
+          "%d bands, every band inflates back to its QOI bytes"
+          % (counts[QOID_FLAG_KEYFRAME], counts[QOID_FLAG_DELTA],
+             DECODER_FRAME_SLOTS))
+
 
 def _selftest():
     got = qoi_encode(_REFERENCE_PIXELS)
@@ -943,6 +1443,7 @@ def _selftest():
     if zlib.decompress(qoiz_encode(_REFERENCE_PIXELS), -15) != _REFERENCE_STREAM:
         raise PudError("QOI+deflate encoder does not round trip to the QOI stream")
     print("  QOI+deflate encoder round trips to the QOI reference stream")
+    _selftest_qoid()
     print("  band limit %d pixels, %d bytes per transfer"
           % (PUD_MAX_BAND_PIXELS, USB_TRANS_MAX_SIZE))
     try:
