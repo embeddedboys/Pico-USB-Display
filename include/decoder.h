@@ -45,8 +45,15 @@
  * blocks only).  Experimental; see notes/decoders.md. */
 #define DECODER_USE_QOID 6
 
+/*
+ * CMake always defines this (DECODER_TYPE in CMakeLists.txt, default 3 = QOI),
+ * so the fallback only applies to a build that bypassed it -- in which case it
+ * has to agree with that default.  It used to say JPEGDEC, which would have
+ * built a firmware the driver does not speak, silently, from the same source
+ * tree the CMake build produces a working image from.
+ */
 #ifndef DECODER_TYPE
-#define DECODER_TYPE DECODER_USE_JPEGDEC
+#define DECODER_TYPE DECODER_USE_QOI
 #endif
 
 typedef unsigned char u8;
