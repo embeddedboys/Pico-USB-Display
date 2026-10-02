@@ -99,8 +99,12 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    tinfl/libdeflate 都一样 ✓；代价 RP2350 +64 KB、RP2040 +32 KB ✓ 两块都编得过），
    4 槽在 RP2350 上能链接但 `.data+.bss` 到 504 KB、**运行时没有栈**（实测起不来）✗ ——
    要更深的流水线得先把每次传输的上限调小（槽随之变小，带数变多反而更利于重叠）。
-4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
-   它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
+4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，它只包装 `malloc`
+   （无 `ucHeap` 符号）。上限由链接脚本的 `_sbrk` 强制（卡在 `0x20080000`，越界返回 NULL、
+   不踩中断栈），所以**缺的从来不是上限而是可见性**：`configUSE_MALLOC_FAILED_HOOK=1` +
+   `configCHECK_FOR_STACK_OVERFLOW=2` + `main.c` 的两个钩子已补上，**代价只有 RAM +8 B**
+   （换 heap_4 要静态预留 16 KB，而内核只需约 10.3 KB）。详见
+   [pitfalls-memory.md](notes/pitfalls-memory.md) 3.2/3.3。
 5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读），
    现在是 7 项（含 `"QOI+deflate (tinfl)"` / `"QOI+deflate (libdeflate)"` /
    `"QOI+deflate+dict"`），并有 `_Static_assert` 兜底；**不要把编号重排** ——

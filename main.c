@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <malloc.h>
 
 #include "pico/time.h"
 #include "pico/stdio.h"
@@ -43,6 +44,67 @@
 
 void vApplicationTickHook()
 {
+}
+
+/*
+ * Two diagnostics the firmware used to lack.
+ *
+ * The heap is heap_3, so these allocations come from newlib's heap and its
+ * bound is the linker script's -- _sbrk stops at 0x20080000.  That bound is
+ * enforced, but nothing reported reaching it: a failed xTaskCreate() just
+ * returned pdFAIL.  heap_3.c calls this hook on a NULL from malloc when
+ * configUSE_MALLOC_FAILED_HOOK is 1, which is visibility without the 16 KB a
+ * heap_4 reservation would cost.  mallinfo() reads the same allocator, so the
+ * number printed here is the real remainder (notes/pitfalls-memory.md 3.2).
+ *
+ * Both hooks run where printf is acceptable: the malloc hook from whichever
+ * task asked for memory, the stack hook from the context switch that noticed.
+ */
+
+static unsigned heap_free_bytes(void)
+{
+	struct mallinfo mi = mallinfo();
+
+	return (unsigned)mi.fordblks;
+}
+
+void vApplicationMallocFailedHook(void)
+{
+	printf("FATAL: heap exhausted (%u B free)\n", heap_free_bytes());
+	__breakpoint();
+}
+
+/*
+ * A second way to lose a task silently: xTaskCreate() returns
+ * errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY instead of panicking, and it allocates
+ * the stack and the TCB in two separate mallocs, so the hook above does not
+ * necessarily fire for it.  Without this, an over-committed heap shows up as a
+ * missing task and a device that half works.
+ *
+ * The decoder task's creation is inside decoder.c and is not checked here.
+ */
+static void check_task_created(BaseType_t rc, const char *name)
+{
+	if (rc != pdPASS) {
+		printf("FATAL: xTaskCreate(%s) failed, no memory (%u B free)\n",
+		       name, heap_free_bytes());
+		__breakpoint();
+	}
+}
+
+/*
+ * configCHECK_FOR_STACK_OVERFLOW = 2.  pcTaskName points into the overflowed
+ * task's TCB, which is exactly the memory that may already be damaged -- print
+ * it, but do not rely on it being readable or terminated.  main() implements no
+ * vApplicationGetIdleTaskMemory/# configSUPPORT_STATIC_ALLOCATION, so the name
+ * is the heap-allocated one the kernel copied at creation.
+ */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+	(void)xTask;
+	printf("FATAL: stack overflow in task '%s'\n",
+	       pcTaskName ? pcTaskName : "(unnamed)");
+	__breakpoint();
 }
 
 #if !INDEV_DRV_NOT_USED
@@ -67,6 +129,16 @@ portTASK_FUNCTION(example_indev_read_task, pvParameters)
 static portTASK_FUNCTION(usb_task_handler, pvParameters)
 {
 	usb_device_init();
+
+	/*
+	 * Every task and the timer queue are allocated by now, so this is the
+	 * steady-state heap headroom, read from the same allocator the kernel
+	 * uses.  It is printed rather than assumed: there is no
+	 * configTOTAL_HEAP_SIZE to compare against (heap_3 ignores it), and a
+	 * number nobody can read is how the 128 KB it used to claim went on
+	 * being believed.  Watch it if a decoder or a buffer changes.
+	 */
+	printf("heap after init: %u B free\n", heap_free_bytes());
 
 	while (!usb_is_configured())
 		vTaskDelay(pdMS_TO_TICKS(1));
@@ -104,14 +176,17 @@ int main(void)
 	pud_init();
 
 	TaskHandle_t usb_handler;
-	xTaskCreate(usb_task_handler, "usb_task", 256, NULL,
-	            (tskIDLE_PRIORITY + 3), &usb_handler);
+	check_task_created(xTaskCreate(usb_task_handler, "usb_task", 256, NULL,
+	                               (tskIDLE_PRIORITY + 3), &usb_handler),
+	                   "usb_task");
 	vTaskCoreAffinitySet(usb_handler, (1 << 0));
 
 #if !INDEV_DRV_NOT_USED
 	TaskHandle_t indev_handler;
-	xTaskCreate(example_indev_read_task, "indev_read", 256, NULL,
-	            (tskIDLE_PRIORITY + 0), &indev_handler);
+	check_task_created(xTaskCreate(example_indev_read_task, "indev_read", 256,
+	                               NULL, (tskIDLE_PRIORITY + 0),
+	                               &indev_handler),
+	                   "indev_read");
 #endif
 
 	printf("calling freertos scheduler, %lld\n", time_us_64());

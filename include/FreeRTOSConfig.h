@@ -77,12 +77,34 @@
 /* Memory allocation related definitions. */
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
+
+/* This number does nothing, and saying so here is the point: the linked heap is
+ * heap_3, which only wraps malloc() and never reads this constant (there is no
+ * ucHeap symbol).  The kernel's allocations therefore come from the C library's
+ * heap, whose real bound is the linker script's -- _sbrk refuses to pass
+ * 0x20080000, so exhaustion returns NULL instead of growing into the interrupt
+ * stack.  Left at a round value rather than deleted, because a future move to
+ * heap_4 or heap_5 would make it live again.
+ *
+ * What was actually missing was visibility, not a bound, so the fix is
+ * configUSE_MALLOC_FAILED_HOOK below and the hook in main.c -- which heap_3.c
+ * does call (portable/MemMang/heap_3.c).  See notes/pitfalls-memory.md 3.2.
+ * For the kernel's needs, if it ever does move to heap_4: the application never
+ * calls pvPortMalloc(), CherryUSB is built without an OSAL (src/cherryusb/
+ * CMakeLists.txt lists no usb_osal_*.c and no usb_osal_* symbol is in the ELF),
+ * and the tasks total about 10.3 KB with their TCBs and one binary semaphore. */
 #define configTOTAL_HEAP_SIZE                   (128*1024)
 #define configAPPLICATION_ALLOCATED_HEAP        0
 
 /* Hook function related definitions. */
-#define configCHECK_FOR_STACK_OVERFLOW          0
-#define configUSE_MALLOC_FAILED_HOOK            0
+/* Method 2 (check the pattern at every context switch).  This firmware has a
+ * history of HardFaults from an overflowing interrupt stack -- CFSR STKERR,
+ * see notes/debugging.md -- and the decoder path's peak is a measured 632 B
+ * against a 4 KB task stack, which is only safe while someone keeps checking.
+ * A silent overflow corrupts whatever is next in RAM; the hook below names the
+ * task instead. */
+#define configCHECK_FOR_STACK_OVERFLOW          2
+#define configUSE_MALLOC_FAILED_HOOK            1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 
 /* Run time and task stats gathering related definitions. */

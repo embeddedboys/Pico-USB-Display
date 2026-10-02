@@ -7,7 +7,10 @@
 
 - 大块静态缓冲是内存大头（EP1 缓冲 + 帧槽），它们的尺寸由 `PUD_MAX_TRANSFER` 按板子决定，**不要翻倍**（RP2040 实测 109% RAM 链接失败）。
 - `configTOTAL_HEAP_SIZE` 无效：`heap_3.c` 只是包装 `malloc`，堆的上限是链接脚本的 `__HeapLimit`，越界返回 NULL 而不是踩栈。
-- 保持 `heap_3`；真正该补的是**堆失败可见性**（`configUSE_MALLOC_FAILED_HOOK` + 钩子 + 检查 `xTaskCreate` 返回值）。
+- 保持 `heap_3`；缺的是**可见性**，不是上限。**已补**（2026-10）：`configUSE_MALLOC_FAILED_HOOK=1`
+  + `vApplicationMallocFailedHook()`，另加 `configCHECK_FOR_STACK_OVERFLOW=2`
+  + `vApplicationStackOverflowHook()`，`main.c` 的 `usb_task` 启动时用 `mallinfo()` 打印真实堆余量。
+  **实测代价只有 RAM +8 B**（FLASH +8.3 KB）；**换 heap_4 会静态预留 16 KB**，而内核只需约 10.3 KB。
 - 任务栈深度的单位是 **word**，创建时一次性固定分配；`0xa5` 填充只是调试水位尺，不参与分配。
 
 ## 3.1 静态 RAM 占用
@@ -115,8 +118,11 @@ grep -oE "[^ ]*heap_[0-9]\.c" build-pico2/build.ninja | sort -u
 （`include/FreeRTOSConfig.h`）；**本工程没有创建任何软件定时器**，所以它只是空转，
 256 words 足够（真要用定时器回调前先加大）。测量方法见 [debugging.md](debugging.md)。
 
-`xTaskCreate` 失败时返回 `errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY`，本项目未检查该返回值 ——
-堆被耗尽时会静默少一个任务。加任务/加大栈前先算总量。
+`xTaskCreate` 失败时返回 `errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY`（它**不**panic），而且是
+**两次** `malloc`（栈 + TCB），所以 `vApplicationMallocFailedHook` 未必会触发 —— 堆被耗尽时
+会静默少一个任务。`main()` 里的 `usb_task` 与 `indev_read` 已改为经
+`check_task_created()` 检查并打印致命信息（2026-10）；**`decoder_task` 的创建在 `decoder.c`
+里，仍未检查**。加任务/加大栈前先算总量。
 
 ## 3.3 该选 heap_几？—— 保持 `heap_3`
 

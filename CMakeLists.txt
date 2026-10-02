@@ -249,6 +249,14 @@ target_link_libraries(${PROJECT_NAME}
     libdeflate
     tinyd
     freertos_config
+    # Heap3 stays.  It looks like it makes configTOTAL_HEAP_SIZE meaningless,
+    # and it does -- but the bound it lacks is already enforced underneath:
+    # _sbrk checks 0x20080000 and returns NULL rather than growing into the
+    # interrupt stack (notes/pitfalls-memory.md 3.2).  What was actually
+    # missing was visibility, and heap_3.c does call
+    # vApplicationMallocFailedHook() when configUSE_MALLOC_FAILED_HOOK is 1,
+    # so that is where the fix belongs -- it costs no RAM, where heap_4 would
+    # reserve 16 KB for a kernel that only needs about 10 KB.
     FreeRTOS-Kernel-Heap3
 )
 
