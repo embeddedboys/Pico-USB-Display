@@ -1,37 +1,42 @@
 # AGENTS.md
 
-本仓库的工作规则，供 AI agent（以及人）在改动前先读一遍。
-
-**详细知识在 [`notes/`](notes/README.md)**：本文只写"必须遵守的约束"和入口，
-不重复细节，以免每次会话都吃掉大量上下文。
-
----
+> 本仓库是 RP2350（Pico 2）上的 USB 显示固件（FreeRTOS + CherryUSB + PIO 8080 TFT）。
+> 通用知识库/测试约定见工作区根 [`../AGENTS.md`](../AGENTS.md)；详细知识见 [`notes/`](notes/README.md)。
+> 本文只写"必须遵守的约束"和入口；细节一律在 notes，改动前先读。
 
 ## 铁律
 
-1. **未经明确指令，不要 `git commit`，更不要 `git push`。**
-   改完先报告改了什么、验证到什么程度，等指令。
-   （曾经把"告诉你提交者身份"误解成"让你提交"，多做了事。）
-2. **构建必须用 `build-pico2/`**（`PICO_BOARD=pico2` / RP2350）。
-   仓库根的 `build/` 是 RP2040 配置，烧到 Pico 2 上跑不起来。
-3. **仓库内不得出现内网/个人信息**：本机绝对路径、内网 IP、口令、内部代号。
-4. **不要把解码放进 USB 中断**（会 HardFault，见"架构不变量"）。
-5. **不要去掉 EP1 流控**（那是局部刷新残影的修法，见"架构不变量"）。
+1. **未经明确指令，不要 `git commit`，更不要 `git push`。** 改完先报告改了什么、
+   验证到什么程度，等指令。（曾经把"告诉你提交者身份"误解成"让你提交"。）
+2. **构建必须用 `build-pico2/`**（`PICO_BOARD=pico2` / RP2350）。仓库根的 `build/`
+   是 RP2040 配置，烧到 Pico 2 上跑不起来。
+3. **仓库内不得出现内网/个人信息**：本机绝对路径、内网 IP、口令、代理地址、板子序列号、内部代号。
+4. **不要把解码放进 USB 中断**（会 HardFault，见"架构不变量"1）。
+5. **不要去掉 EP1 流控**（局部刷新残影的修法，见"架构不变量"2）。
+6. **`src/decoders/{qoi,rle,jpegdec,tjpgd}/` 是 vendored**，必须与上游仓库
+   （`rgb565-qoi` / `rgb565-rle`）**逐字节一致**：要改行为先改上游、再把文件整体拷回来
+   （`cmp` 验证）；编译期差异走它们的 `RGB565_*_SECTION` 钩子。
+7. **`include/bootlogo.h` 是 4500+ 行的生成大数组**：用编辑器的精确替换改，
+   **不要用 `sed -i` 之类批处理**（曾因参数列表过长把文件清空，靠 `git checkout` 才恢复）。
+8. **协议字段改动要成对改驱动仓**（`REQ_*`、`struct pud_ep1_header`、`struct pud_caps`、
+   `struct pud_params`、`struct pud_touch_report`），并同步两侧协议文档（见不变量 6）；
+   字段只追加、不重排、不复用已退休的编号。
 
 ## 提交与身份
 
-- `user.name` = `Wooden Chair`，`user.email` = `hua.zheng@embeddedboys.com`
-- **提交一律带 `Signed-off-by`**：用 `git commit -s`（仓库既有历史都带 sign-off）
-- 提交信息用**内核风格**：`模块: 组件: 简述`，正文写清具体改了什么、为什么、效果；
-  一个逻辑改动一个提交，不要把互不相关的改动塞进同一个提交
-- 默认分支 `main`；子模块指针改动要和子模块提交一起考虑
+- `user.name` = `Wooden Chair`，`user.email` = `hua.zheng@embeddedboys.com`；
+  提交一律 `git commit -s`（仓库既有历史都带 sign-off），信息用内核风格
+  `模块: 组件: 简述`，一个逻辑改动一个提交。
+- 默认分支 `main`；子模块指针改动要和子模块提交一起考虑。
+- **提交与推送是两件事**：默认只提交、不推送，推送需要人工放行。
 
-## 构建与烧录
+## 构建 / 烧录 / 验证入口
 
 ```bash
 ./build.sh lunch     # 选板子（pico/pico2）+ 面板配置（configs/）+ 烧录方式，记在 .pud-config
 ./build.sh           # 配置 + 构建；pico2 -> build-pico2/，pico -> build/
 ./build.sh flash     # 按选中的方式烧（picotool/openocd/gdb/blackmagic/none）
+./build.sh flash -n  # 只打印命令行；各条命令的实测状态见 notes/build-and-flash.md
 ```
 
 等价的手工命令（`build.sh` 内部就是它）：
@@ -40,75 +45,31 @@
 cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 ```
 
-- **面板配置从仓库自己的 `configs/` 来**（`-DPUD_CONFIG=<名字>` 传给 CMake），
-  不再从子模块里 include；改/加面板配置改这里。脚本都在 `scripts/`，入口是
-  `./build.sh`（`configs` / `config` / `flash` / `clean` 也在里面）。
-  `./build.sh flash -n` 只打印命令行；各条命令的实测状态见
-  [notes/build-and-flash.md](notes/build-and-flash.md)。
-- 子模块要 `--recursive`（CherryUSB / lz4 / pico-display-lib / FreeRTOS-Kernel
-  及其 ports，以及 **pico-turbo**：时钟/电压/flash 分频那一侧的知识与 `boards/*.cmake`
-  都在它里面，见 <https://github.com/IotaHydrae/pico-turbo>）。直连 GitHub 失败时，"走代理 + `git -c http.version=HTTP/1.1`"
-  是验证过可行的组合（`ghproxy`/`gitee` 镜像不可用）。
-- 烧录：OpenOCD 跑在 **Windows 宿主机**（WSL 看不到调试器，也无法 `mknod`
-  出 `/dev/bus/usb`），WSL 侧用
-  `gdb-multiarch -q -nh -ex "target extended-remote localhost:3333"` —— 这就是
-  `FLASH=gdb` 那一路，`./build.sh flash` 照它跑；`picotool` / `openocd` /
-  `blackmagic` 见 [notes/build-and-flash.md](notes/build-and-flash.md) 的表。
+- **面板配置来自仓库自己的 `configs/`**（`-DPUD_CONFIG=<名字>` 传给 CMake），不再从子模块
+  include；脚本都在 `scripts/`，入口是 `./build.sh`（`configs`/`config`/`flash`/`clean` 也在里面）。
+- 子模块要 `--recursive`（CherryUSB / lz4 / pico-display-lib / FreeRTOS-Kernel 及其 ports，
+  以及 **pico-turbo**：时钟/电压/flash 分频与 `boards/*.cmake` 都在它里面）。直连 GitHub
+  失败时"走代理 + `git -c http.version=HTTP/1.1`"是验证过可行的组合（`ghproxy`/`gitee` 镜像不可用）。
+- 烧录：OpenOCD 可跑在 **Windows 宿主机**（WSL 看不到调试器，也无法 `mknod` 出
+  `/dev/bus/usb`），WSL 侧用 `gdb-multiarch -q -nh -ex "target extended-remote localhost:3333"`；
   `-q -nh` 是必需的（否则会读 `~/.gdbinit`，装了 gef 之类会直接报错中断）。
-- **本机直连也行**（2026-09-27 实测）：Raspberry Pi Debug Probe（CMSIS-DAP，
-  `2e8a:000c`）+ 本机 openocd 0.12.0 → `./build.sh flash -m openocd` 直接 `Verified OK`；
-  `FLASH=gdb` 配本机 openocd 起的 GDB server 同样能烧（本机没有 `gdb-multiarch`
-  时用 `/usr/bin/gdb` 也行）。
+  **本机直连也行**（2026-09-27 实测）：Raspberry Pi Debug Probe（CMSIS-DAP `2e8a:000c`）+
+  本机 openocd 0.12.0 → `./build.sh flash -m openocd` 直接 `Verified OK`；`FLASH=gdb` 配本机
+  openocd 起的 GDB server 同样能烧（本机没有 `gdb-multiarch` 时用 `/usr/bin/gdb` 也行）。
 - **应用态不用按 BOOTSEL**：固件带 picoboot 的 reset 接口（描述符里第 2 个接口，
   `0xFF/0x00/0x01`，见 [notes/usb-protocol.md](notes/usb-protocol.md)），
   `./build.sh flash -m picotool --reboot` 会先请板子自己重启进 BOOTSEL 再烧
   （实测 2026-09-27，不需要调试器）。
 - **只读检查固件状态时，读完要 `monitor resume`**；别用 `monitor reset run`
-  （会清掉计数器和显示状态）。卡死时复位才用它。
-- 细节见 [`notes/build-and-flash.md`](notes/build-and-flash.md) 与
-  [`notes/debugging.md`](notes/debugging.md)。
-
-## 板子上的工作方式（省时间，都是踩过的坑）
-
-真机验证每一轮都很贵，按这个来：
-
-1. **一轮只做一件事**：脚本先写好，一次 `scp` 上去跑完 —— 不要在一轮里串多次 ssh、
-   gdb、构建。板子一卡，一轮能白等十分钟。
-2. **可能挂住的命令一律套 `timeout`**（`lsusb`、`dmesg`、debugfs 读写、`make`）：
-   USB 栈一卡，`lsusb` 会永远不返回，没有 timeout 就整轮坐在工具自己的上限上。
-   **工具调用自己的超时压到 ≤4 分钟**，挂住要立刻暴露。
-3. **gdb 读固件是 30~60 s 级**的操作（连调试器 + halt 双核 + 读符号）：一轮最多读一次；
-   能用 `dmesg`/`usbmon` 说清就别读。
-4. **固件只编译一次**，产物留在板子上复用。
-5. 板子重启后**总线与路径会变**（`6-1` → `3-1`、usbmon 的 `6u` → `3u`）：脚本里动态
-   发现，别写死。
-6. 下结论前**两侧都要看**：主机 `dmesg`/`usbmon` 与设备侧计数器（gdb）对得上才算数。
-7. **一轮里不要既改代码又做真机验证**：先改完、编译过，再上板。
-
-## 烧写与测量纪律（2026-09 新增，血泪换的）
-
-1. **批量前先跑一个点**，逐项确认：①构建 ✓ ②**回读 flash 与构建产物比对** ✓ ③拿到日志/结果 ✓
-   ④状态行里的**实测频率 = 请求值** ✓。四项齐了再开循环 —— 曾整批死在烧写上白等半小时。
-2. **`openocd program ... verify` 可能报 "Verified OK" 却只写了一部分** ✗（实测：flash 从
-   0x800 起仍是 0xFF，板子还在跑旧镜像，看起来像新固件行为异常）。要么先
-   `flash erase_sector` 再写，要么用 picotool，并且**回读比对**才算数。
-3. **调试会话结束时核不能留在 halt** ✗：核停了，bootrom 的 USB 也不上线，板子会从 `lsusb`
-   整个消失，下一次烧写报 "no accessible RP-series devices"。会话必须以 `reset run`/`resume`
-   收尾（"读完要 `monitor resume`" 那条是同一回事，这里是它在 USB 上的后果）。
-4. **日志读取器要在烧写之前启动** ✓：否则抓到的是上一个应用的残留输出，读起来像是这次成功了。
-5. **过快的 flash 分频会写进 boot2**，于是每次复位都重演同一个失败 —— 实测官方 Pico 2 在
-   520 MHz 配 DIV 4（130 MHz flash）时核进 lockup，**软件复位救不回来，只能按 BOOTSEL**。
-   做分频实验时手边要够得着按键。
-6. **调试器是定位工具，别为了"纯 USB"丢掉它**：PC 直接说明状态（在函数里 = 在跑；
-   `isr_hardfault` = 真挂了；在 bootrom = 镜像没起来）。
-7. **工具输出不要静默**（`>/dev/null` 会把真正的错误一起吞掉 ✗），关键步骤把结果打出来。
-8. **不要把脚本的"模型列"当实测** ✗：`desktop_codecs.py` 排序表括号里的时间是按
-   `LINK_BYTES_PER_S`（1.1 MB/s 常数，来自另一次会话）算出来的**模型**，只有带
-   `median`/`bandwidth`/`encode` 的 `device_table` 才是设备实测。两者混在一张表里引用过一次，
-   让"QOI 基准"差了 15%（85.22 ms 对真值 100.05 ms ✗）。脚本现在带 `--device` 会先用一次
-   真实传输**标定**并在表头写明来源（`measured in this run` / `a model ... NOT a measurement`）
-   —— 引用任何时间之前先读那一行 ✓。**绝对速率是会话属性**（同一块板同一类端口，实测过
-   0.94 与 1.10 MB/s 两档），只有比值能搬。
+  （会清掉计数器和显示状态）。卡死时才用它。
+- **首选验证方式：不加载内核驱动**，用 `tools/` 的 pyusb 脚本直连（`tools/pud_usb.py`
+  是共享库，每种编码器只有一份，见 [notes/scripts.md](notes/scripts.md)）。设备必须未被
+  `pud` 驱动占用；装仓库根的 `60-pico-usb-display.rules` 可免 root —— **`60-` 不能退回
+  `50-`**（会被 `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效）。规则同时
+  放行面板（`2e8a:0001`）和 BOOTSEL 里的 bootrom（`0003`/`000f`，外加 SDK `stdio_usb` 的
+  `0009`/`000a`）；只放行 `0001` 时 `picotool` 会报 `unable to connect. Maybe try 'sudo'`。
+- 板子上的工作方式与烧写/测量纪律见 [notes/debugging.md](notes/debugging.md) 与
+  [notes/build-and-flash.md](notes/build-and-flash.md)。
 
 ## 架构不变量（动了就坏）
 
@@ -126,10 +87,11 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    `DECODER_FRAME_SLOTS - 1` 帧（2 槽时是 1 帧，现在是 3 槽 ⇒ ≤2 ✓ 实测 dropped == 0 ✓）。
    去掉它 = 槽满静默丢帧 = 局部刷新残影。
 3. **RAM 很紧。** RP2350 512 KB SRAM 里 `ep1_read_buffer`（64 KB）+
-   `s_frames`（2 × 64 KB）已经占掉一大块；**RP2040 只有 256 KB 可用**，
+   `s_frames`（**3 × 64 KB**）已经占掉一大块；**RP2040 只有 256 KB 可用**，
    所以这两个尺寸**都不是写死的，由 `PUD_MAX_TRANSFER` 按板子决定**
    （`src/cherryusb/usbd_vendor.h`，RP2350 64 KB / RP2040 32 KB），
-   帧槽在 `decoder.c` 里用同一个宏并有 `_Static_assert` 兜底。
+   帧槽在 `decoder.c` 里用同一个宏（`DECODER_FRAME_MAX = PUD_MAX_TRANSFER`）并有
+   `_Static_assert` 兜底。
    改它 = 改协议，主机靠 `PUD_CMD_GET_CAPS` 问设备（见"架构不变量"第 6 条）。
    **不要把 `DECODER_FRAME_SLOTS` 或 `PUD_MAX_TRANSFER` 翻倍**
    （RP2040 上实测 128 KB + 2×64 KB 时 .data/.bss 达到 RAM 的 109%，直接链接失败）。
@@ -140,11 +102,15 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 4. **`configTOTAL_HEAP_SIZE` 在本项目不起作用** —— 链接的是 `heap_3.c`，
    它只包装 `malloc`。想限制堆得改链接脚本或换 heap_4。
 5. **`decoder_names[]` 必须覆盖所有 `DECODER_TYPE`**（曾漏 `"QOI"` 导致越界读），
-   且**不要把编号重排** —— `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机。
+   现在是 7 项（含 `"QOI+deflate (tinfl)"` / `"QOI+deflate (libdeflate)"` /
+   `"QOI+deflate+dict"`），并有 `_Static_assert` 兜底；**不要把编号重排** ——
+   `decoder_type` 会通过 `PUD_CMD_GET_CAPS` 上报给主机。
    两种 JPEG 实现都保留：tjpgd（局刷正确但慢）/ JPEGDEC（快但 `x != 0` 会卡死显示），
-   见 [notes/decoders.md](notes/decoders.md)。
+   见 [notes/decoder-architecture.md](notes/decoder-architecture.md)。
 6. **协议字段改动要成对改驱动**（`REQ_*`、`struct pud_ep1_header`、`struct req_ep2_in`），
-   并同步两个仓库的 `notes/usb-protocol.md`。
+   并同步两侧协议文档：本仓的 [`notes/usb-protocol.md`](notes/usb-protocol.md)、
+   [`notes/usb-params.md`](notes/usb-params.md)、[`notes/touch-ep4.md`](notes/touch-ep4.md)
+   与驱动仓的 `notes/usb-protocol.md`（权威定义）。
 7. **异步刷新有缓冲区契约**：`tft_async_video_flush()` 返回时传输仍在进行，
    `vmem` 在 `tft_async_video_wait()`（或下一次 flush，它会先完成上一个）返回前
    **不得复用**。QOI 默认路径靠**两块 band 缓冲乒乓**满足（解码 B 时 A 还在传；
@@ -159,7 +125,9 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
    推 band 高度，所以**重新生成时 band 高度必须整除面板高度**。
 9. **LZ4 一个 block 不能分块解码**：每个 match 都指回同一 block 之前解出的输出，所以
    整块必须落进一块连续缓冲，该缓冲同时是字典。因此**设备一次只持有一个 band**
-   （`lz4_band[43680]`，按主机分带用的同一个 `band_pixels` 规则定尺寸），
+   （`lz4_band[LZ4_BAND_PIXELS]`，`LZ4_BAND_PIXELS = ((PUD_MAX_TRANSFER -
+   PUD_EP1_HEADER_SIZE - 16) / 3) + 1` ⇒ RP2350 **21837 px = 43674 B**；
+   旧笔记写 21840 px / 43680 B，是旧公式没减 12 B EP1 头，以代码为准），
    **主机必须按 `PUD_CMD_GET_CAPS` 上报的 `band_pixels` 分带**，一个传输一个自包含 block。
    放不下或解码长度与窗口不符就计数丢弃（`g_decoder_stat_lz4_*`），**不要截断**。
    整帧 307200 B 的 block 永远解不了 —— 旧实现每帧 `malloc` 308 KB 就是这么坏的。
@@ -170,110 +138,37 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
     `set_dir()` 调用两次会把轴序转回去）。
     EP4 的上报布局（8 字节，`include/pud.h` 的 `struct pud_touch_report`）是**协议字段**，
     改它要同步驱动仓的 `notes/usb-protocol.md`。
-
 11. **面板寄存器写也不能在 USB 中断里做。** 走总线（SPI/PIO）要等硬件，放在厂商请求回调里
     会长时间占着 USB 中断 —— 运行期参数通道因此把 `rotation` 拆成两半：中断里只记账
     （几何 + `indev_set_dir()`，都是几次赋值），MADCTL 写由 `decoder_task` 在画下一帧之前
-    执行（`pud_params_flush_display()`，见 notes/usb-protocol.md）。
+    执行（`pud_params_flush_display()`，见 [notes/usb-protocol.md](notes/usb-protocol.md)）。
 
 ## 当前配置（改前先读 notes）
 
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
-| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验；驱动还不会发。**两块板都装得下** ✓ —— RP2040 上 3 帧槽实测 164 KB/264 KB，提交信息里"只 RP2350"的说法不成立 ✗；限制不在设备而在**等级**：主机侧 默认已从 level 1 改成 6（字节 −11.2% → −26.6% ✓）。见 [decoders.md](notes/decoders.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验；驱动还不会发。**两块板都装得下** ✓ —— RP2040 上 3 帧槽实测 164 KB/264 KB，提交信息里"只 RP2350"的说法不成立 ✗；限制不在设备而在**等级**：主机侧默认已从 level 1 改成 6（字节 −11.2% → −26.6% ✓）。见 [notes/qoiz.md](notes/qoiz.md)）、`6`=QOI+deflate+跨帧字典（实验；持续负载下会**静默冻结**，未定位，见 [notes/qoid.md](notes/qoid.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
 | `OVERCLOCK_ENABLED` | `1` | 板配置 profile 1：RP2350 225 MHz（QSPI 75 MHz，VREG 1.10V）；实测结论见 [`notes/architecture.md`](notes/architecture.md) |
-| `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls.md`](notes/pitfalls.md) |
-| 面板 | ILI9488 / 8080 并口 / PIO，480×320（旋转后） | 改分辨率要连带改驱动分带与 QOI 缓冲上限；**面板参数由 `PUD_CMD_GET_CAPS` 上报**，主机不再写死 |
-| 触摸采样 | 轮询 10 ms + EP4 `bInterval` 8 ms | 两个旋钮要一起改（主机只在 `bInterval` 到点时才来取报告）。实测拖动相邻点 32 ms → **8.0 ms（≈125 Hz）**，整屏吞吐无变化（A/B 四档 ±0.1%）；见 [`notes/usb-protocol.md`](notes/usb-protocol.md) 的 EP4 一节 |
+| `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls-display.md`](notes/pitfalls-display.md) |
+| 面板 | ILI9488 / 8080 并口 / PIO，320×480 原生（`TFT_ROTATION 1` → 480×320） | 改分辨率要连带改驱动分带与 QOI 缓冲上限；**面板参数由 `PUD_CMD_GET_CAPS` 上报**，主机不再写死 |
+| 触摸采样 | 轮询 10 ms + EP4 `bInterval` 8 ms | 两个旋钮要一起改（主机只在 `bInterval` 到点时才来取报告）。实测拖动相邻点 32 ms → **8.0 ms（≈125 Hz）**，整屏吞吐无变化（A/B 四档 ±0.1%）；见 [`notes/touch-ep4.md`](notes/touch-ep4.md) |
 
-可调构建开关（cache 变量，见 `CMakeLists.txt`）：
+## 可调构建开关（cache 变量，见 `CMakeLists.txt`）
 
 | 开关 | 默认 | 作用 |
 | --- | --- | --- |
-| `PUD_DECODER_PINGPONG` | `1` | QOI/RLE 批次乒乓；关掉省 7680 B/解码器，代价是设备侧多花 7~39% 时间（[decoders.md](notes/decoders.md)） |
-| `PUD_CODEC_IN_RAM` | `1` | QOI/RLE 解码循环放 SRAM（编解码库的 `RGB565_*_SECTION` 钩子）；设备侧解码快 2~9%，链路受限时端到端无变化（[architecture.md](notes/architecture.md)） |
-| `QOI_NONCALLBACK` | `2` | QOI 走非回调 API + band 乒乓；设备侧比回调版快 22~48%，代价是 87 KB 缓冲（`0`/`1` 只用于 A/B 和回落，[decoders.md](notes/decoders.md)） |
+| `PUD_DECODER_PINGPONG` | `1` | QOI/RLE 批次乒乓；关掉省 7680 B/解码器，代价是设备侧多花 7~39% 时间（[notes/qoi.md](notes/qoi.md)） |
+| `PUD_CODEC_IN_RAM` | `1` | QOI/RLE 解码循环放 SRAM（编解码库的 `RGB565_*_SECTION` 钩子）；设备侧解码快 2~9%，链路受限时端到端无变化（[notes/architecture.md](notes/architecture.md)） |
+| `QOI_NONCALLBACK` | `2` | QOI 走非回调 API + band 乒乓；设备侧比回调版快 22~48%，代价是 87348 B 缓冲（旧记约 87 KB，是旧公式没减 12 B EP1 头）；`0`/`1` 只用于 A/B 和回落（[notes/qoi.md](notes/qoi.md)） |
 | `DECODER_STATS` | `0` | 解码/刷屏耗时计数器（`g_qoi_stat_*`），调试用 |
 | `PUD_DELTA_WIN` | `32768`（RP2040 `16384`） | 只对 `DECODER_TYPE=6` 生效：**每个帧槽**一块字典窗口，布局 `[历史][输出]` ⇒ 单条带 QOI 与它 diff 的那条带各自不超过一半。RP2350 上 3 槽共 96 KB，`data+bss` 464 KB/520 KB ✓；超出的条带**计数丢弃**（`g_decoder_stat_qoid_oversize`），不截断 |
-| `PUD_INFLATE` | `tinfl` | 只对 `DECODER_TYPE=5` 生效：`tinfl`（miniz）或 `libdeflate`；解同一种码流，**不是协议字段**。libdeflate 设备侧 inflate 快 32~45%，桌面负载端到端无变化（[decoders.md](notes/decoders.md)） |
+| `PUD_INFLATE` | `tinfl` | 只对 `DECODER_TYPE=5` 生效：`tinfl`（miniz）或 `libdeflate`；解同一种码流，**不是协议字段**。libdeflate 设备侧 inflate 快 32~45%，桌面负载端到端无变化（[notes/qoiz.md](notes/qoiz.md)） |
 
-## 用户空间工具（`tools/`）与验证脚本（`tests/`）
+> 另有 `PUD_EP1_SINK`（默认 `0`，只测链路：收下 EP1 不解码不刷屏）与 `QOI_BUF_ROWS`（默认 `8`），
+> 说明见 `CMakeLists.txt` 注释。
 
-- **不加载内核驱动就能验证全部功能**（pyusb 直连），比反复 insmod/rmmod 快得多。
-  这是首选的验证方式。
-- **依赖选型**：`pyusb` + `Pillow`（≈3 MB，用来替代 `opencv-python` 的 ≈60 MB）；
-  视频/录屏用 `ffmpeg` CLI；`numpy` **可选**（只影响 RGB565 打包速度）。
-- **每种编码器只保留一份**，都在 `tools/pud_usb.py`（`ENCODERS`）：QOI 与 RLE 各自与
-  它们的 C 库**逐字节一致**（`python3 tools/pud_usb.py` 自检里有参考向量），LZ4 用
-  `lz4.block`（就是内核链接的那份 liblz4；它的码流**跨版本不保证逐字节一致**，但都能解）。
-  新脚本必须复用它们，不要再写第二份编码器或第二套协议常量。
-  发图统一走 `Display.send_rgb565(..., codec=...)`，**分带由它负责**（LZ4 尤其不能整帧发）。
-- `tools/pudcodec` 是 C 写的**离线**转换器（图片/帧序列 ↔ 码流），编解码类型运行时用
-  `--codec` 指定；构建 `cmake -S tools -B tools/build`，`stb` 已 vendor 不需要联网。
-  它与 `pud_usb.py` 在无损源上**逐字节一致**，用 `tests/check_pudcodec.py` 对拍。
-  `--codec lz4` 输出的是 **band 容器**（每 band 一个 block，`--band` 默认取能整除高度的
-  最大行数），因为整帧 block 设备解不了（见"架构不变量"第 9 条）。
-- 本项目面向**桌面**（配合 DRM 驱动），主负载是**局部刷新**：评估编解码器用
-  `tools/desktop_codecs.py`（按"桌面会脏的矩形"比较），整屏照片/噪声测试**不代表**它。
-  真实桌面内容上的结论是 **QOI 每个矩形都快 21~32%**，但**引用时必须带上内容** ✓ ——
-  2026-09-30 用同源实测（同一回路、同一分带规则、四种码器 × 两个内容，见
-  [decoders.md](notes/decoders.md) 的"同源复量"一节）复量：真实内容上 QOI 仍比 LZ4 快
-  **27~35%**（载荷比 0.715 与那份 4K 内容的 0.711 差 0.6% ⇒ 原结论成立 ✓），而合成桌面上
-  **LZ4 在 8 个区域里有 6 个反而更小** ✗；另外 **QOI+deflate level 6 在两个内容的每一个
-  区域都最小最快**（真实整屏 138.99 → 106.85 ms、合成 100.02 → 74.03 ms）✓。
-  那几句里的 MB/s 是会话属性（本机复量 0.94，原记录 1.01~1.09），只有比值能搬。
-  LZ4 的优势在内核侧
-  （不用 vendor 编码器），不是性能
-  （见 [notes/decoders.md](notes/decoders.md)）。**给设备计时必须把编码放在循环外**，
-  否则量的是 Python 编码器而不是解码器。无间隔连发小矩形**不会**打挂板子（2026-09
-  无调试器复测，见 [notes/todo.md](notes/todo.md) 第 8 条），脚本 `--gap-ms` 默认 0。
-- 设备必须未被 `pud` 驱动占用；装 `60-pico-usb-display.rules` 可免 root。
-  **文件名里的 `60-` 不能退回 `50-`** —— 会被
-  `/usr/lib/udev/rules.d/50-udev-default.rules` 覆盖而完全失效。
-  这份规则**同时放行面板（`2e8a:0001`）和 BOOTSEL 里的 bootrom**
-  （`0003`/`000f`，外加 SDK `stdio_usb` 的 `0009`/`000a`；PID 取自 picotool 自己的规则）
-  —— 只放行 `0001` 时
-  `picotool` 会报 `unable to connect. Maybe try 'sudo'`。改了规则要重新插拔设备。
-- 用法与实测数据见 [`notes/scripts.md`](notes/scripts.md)。
+## 相关
 
-## 代码约定
-
-- C 风格用**内核风格：tab + 8 宽缩进**（仓库根的 `.clang-format` 取自内核，唯一偏离是
-  `UseTab: ForIndentation`，理由写在文件里）；`u8/u16/u32` 是本仓库的类型别名。
-  自有代码已整体按它格式化过，保存即格式化（`.vscode/` + `.editorconfig` 把 tab 宽度也
-  钉成 8，否则显示会歪）。**以下不吃这套**，改它们前先看清楚：
-  - `src/decoders/{qoi,rle,jpegdec,tjpgd}/`：vendored，必须与上游逐字节一致 ——
-    各目录放了一份 `DisableFormat: true` 的 `.clang-format` 挡住格式化。
-  - `include/bootlogo.h`（生成的大数组，见"架构不变量"第 8 条）、`tools/stb_*.h`：
-    文件头 `// clang-format off`。
-  - `FreeRTOSConfig.h`、`src/cherryusb/usb_config.h`：`#define` 选项是列对齐的表，
-    格式化会拆散，同样 `// clang-format off`。
-- **编辑器开箱可用**：`.clangd` 指向 CMake 写在 `build-pico2/` 的
-  `compile_commands.json`（`CMAKE_EXPORT_COMPILE_COMMANDS ON`），clangd 需要
-  `--query-driver` 才能拿到 `arm-none-eabi-gcc` 的内建头文件路径
-  （VS Code 已配好）。**先构建一次**再开编辑器，详见
-  [build-and-flash.md](notes/build-and-flash.md) 的"编辑器 / clangd"一节。
-- 新增源文件/目录要加进对应的 `CMakeLists.txt`（`PUD_SOURCES` 或子目录）。
-- **调试打印要算代价**：115200 波特下每行约 1~3 ms，
-  **不要放进每帧路径**。已知例子：EP2 查询路径的 `usb_hexdump` + `USB_LOG_WRN`
-  实测 **9.6 ms/次**（`lz4_drawimg()` 也曾每帧 3 行 `printf`，约 10 ms，已随 LZ4 重写删掉）。
-- 大块缓冲不要每帧 `malloc`（LZ4 曾每帧申请 ~307 KB，已改成静态 band 缓冲；
-  解码器一律用静态缓冲或调用方缓冲）。
-- `src/decoders/qoi/` 与 `src/decoders/rle/` 是 **vendored 代码，必须与上游仓库
-  （`rgb565-qoi` / `rgb565-rle`）逐字节一致**：要改行为先改上游，再把两个文件整体拷回来
-  （`cmp` 验证）。**编译期差异走它们的钩子**，不要在 vendored 文件里塞本项目的改动 ——
-  已经有的例子是 `RGB565_QOI_SECTION` / `RGB565_RLE_SECTION`（放置钩子，见
-  [architecture.md](notes/architecture.md) 的 SRAM 一节）。
-- **TFT 像素格式只有一个出处**：驱动 init 里的 `0x3A`（COLMOD）。`tft_video_sync()` 和异步
-  路径都原样把缓冲区送出去，**不要再给驱动加"顺手转 RGB666"的 `video_sync`**（ILI9488/9486
-  里那两份 0x55 却转 3 字节的已经删了；ILI9481 保留是因为它 init 就是 `0x66`）。
-  详见 [pitfalls.md](notes/pitfalls.md) 的 2.4。
-
-## 文档维护
-
-- 知识库在 [`notes/`](notes/README.md)：架构、协议、解码器流水线、构建烧录、
-  调试、用户空间脚本、踩坑。
-- 改了行为就同步对应文档；协议改动要**同时**改驱动仓的镜像文档。
-- **只写已验证的结论**；推测显式标注"未验证"。
-- 文档用中文，命令/路径/标识符保留英文。
-- `README.md` 是中文主文档，`README.en.md` 是英文镜像 —— 改一个就改另一个。
+- 知识库索引：[notes/README.md](notes/README.md)
+- 通用知识库/测试/退出码/敏感信息约定：工作区根 [`../AGENTS.md`](../AGENTS.md)
+- 协议权威定义：`PUD-kernel-drivers/notes/usb-protocol.md`（本仓那份是设备侧镜像）
