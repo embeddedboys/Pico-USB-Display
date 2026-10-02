@@ -108,7 +108,21 @@
 #define configUSE_DAEMON_TASK_STARTUP_HOOK      0
 
 /* Run time and task stats gathering related definitions. */
+#ifndef PUD_FREERTOS_RUN_TIME_STATS
+#define PUD_FREERTOS_RUN_TIME_STATS             0
+#endif
+
+#if PUD_FREERTOS_RUN_TIME_STATS
+/* The SDK timer is already running; this 32-bit microsecond counter wraps
+ * after about 71 minutes. */
+#define configGENERATE_RUN_TIME_STATS           1
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() ((void) 0)
+#define portGET_RUN_TIME_COUNTER_VALUE()         pud_runtime_counter()
+uint32_t pud_runtime_counter(void);
+#else
 #define configGENERATE_RUN_TIME_STATS           0
+#endif
+
 #define configUSE_TRACE_FACILITY                1
 #define configUSE_STATS_FORMATTING_FUNCTIONS    0
 

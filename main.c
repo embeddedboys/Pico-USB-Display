@@ -43,6 +43,13 @@
 
 #include "pud.h"
 
+#if PUD_FREERTOS_RUN_TIME_STATS
+uint32_t pud_runtime_counter(void)
+{
+	return time_us_32();
+}
+#endif
+
 /*
  * Self-healing watchdog.
  *

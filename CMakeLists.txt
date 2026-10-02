@@ -124,6 +124,11 @@ set(FREERTOS_CONFIG_FILE_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/include)
 add_library(freertos_config INTERFACE)
 target_include_directories(freertos_config SYSTEM INTERFACE
     ${FREERTOS_CONFIG_FILE_DIRECTORY})
+option(PUD_FREERTOS_RUN_TIME_STATS
+    "collect FreeRTOS task run time stats (debug; adds context-switch overhead)"
+    OFF)
+target_compile_definitions(freertos_config INTERFACE
+    PUD_FREERTOS_RUN_TIME_STATS=$<BOOL:${PUD_FREERTOS_RUN_TIME_STATS}>)
 include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/Community-Supported-Ports/GCC/RP2350_ARM_NTZ/FreeRTOS_Kernel_import.cmake)
 
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
