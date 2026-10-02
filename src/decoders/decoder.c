@@ -814,18 +814,15 @@ struct decoder_frame {
 
 static struct decoder_frame s_frames[DECODER_FRAME_SLOTS];
 /*
- * Slots are handed out round-robin, not lowest-free-first, and drawn in the same
- * rotation.  DECODER_TYPE 6 is the reason: its dictionary lives in the slot, so
- * the host has to know which band is resident there, and "the band submitted
- * DECODER_FRAME_SLOTS ago" is only true if the slot a band lands in is
- * `submission % DECODER_FRAME_SLOTS`.  With lowest-free-first that only holds
- * while the pipeline is saturated -- measured on the board with a host slow
- * enough to keep one band in flight: 8 of 15 deltas were refused because every
- * band had gone into slot 0.  A cursor makes the mapping true by construction,
- * and the drain cursor keeps bands reaching the panel in submission order.
+ * Slots are handed out lowest-free-first and drained in index order (see
+ * decoder_submit_frame() and decoder_task()).  "The band submitted
+ * DECODER_FRAME_SLOTS ago" therefore only holds while the pipeline is
+ * saturated; a round-robin fill/drain cursor pair was tried and stalled the
+ * pipeline under a full-screen load (303 submitted, 300 drawn, decoder_task
+ * blocked), so DECODER_TYPE 6 finds its dictionary by the serial the payload
+ * names instead of by slot arithmetic -- notes/decoders.md and notes/todo.md
+ * item 13.
  */
-static int s_fill_slot;
-static int s_drain_slot;
 
 #if DECODER_TYPE == DECODER_USE_QOID
 /*
@@ -846,13 +843,12 @@ static int s_drain_slot;
  * payload, same clocks: 15.90 against zlib's 15.52 cycles per output byte, for
  * 2.4 KB of code instead of 14.1 KB plus 40 KB of window and state.
  *
- * One window per frame slot, laid out [history][output].  The slot a band lands
- * in is `submission % DECODER_FRAME_SLOTS` -- slots are taken lowest-free-first
- * and consumed in index order -- so the history a host can count on is "whatever
- * this slot decoded last time", which for a repeating dirty set is the same band
- * of a previous frame.  Deliberately *not* a whole previous frame: a band's QOI
- * stream is ~11.7 KB of the measured desktop, ~94 KB for the full screen, and
- * the build only has ~150 KB spare.
+ * One window per frame slot, laid out [history][output].  A band lands in the
+ * lowest free slot, so the history a host can count on is "whatever this slot
+ * decoded last time" and the host has to find that out from the device rather
+ * than compute it -- notes/decoders.md and notes/todo.md item 13.  Deliberately
+ * *not* a whole previous frame: a band's QOI stream is ~11.7 KB of the measured
+ * desktop, ~94 KB for the full screen, and the build only has ~150 KB spare.
  *
  * The dictionary is an input the decoder cannot check: tinyd treats the
  * caller's buffer as history, so a wrong or stale dictionary still returns
@@ -890,6 +886,63 @@ static u8 s_qoid_have[DECODER_FRAME_SLOTS];
 volatile u32 g_decoder_stat_qoid_bad; /* malformed header, or tinyd refused */
 volatile u32 g_decoder_stat_qoid_mismatch; /* dictionary is not what it claims */
 volatile u32 g_decoder_stat_qoid_oversize; /* band does not fit the window */
+
+/*
+ * Forensics for the last band this decoder refused.  Refusals are rare (2 in
+ * 14000 sends of ten fixed payloads, measured 2026-10-02) and a counter alone
+ * does not say whether the device decoded the bytes that were sent or bytes
+ * that were mangled on the way in, so the evidence has to survive until a
+ * debugger reads it: what the payload fingerprinted as, where it landed, and
+ * what tinyd made of it.  `sum` is an order-independent byte sum, so a slot
+ * holding half of one band and half of another still matches nothing on the
+ * host.  Written only from qoid_drawimg(), which runs in the decoder task, so
+ * one writer and no locking.
+ */
+volatile struct {
+	u32 count; /* bands refused so far (all three counters together) */
+	u32 rc; /* tinyd result, or a marker for the stage that refused */
+	u32 size; /* payload bytes as received */
+	u32 slot; /* frame slot it arrived in */
+	u32 sum; /* byte sum over the payload */
+	u32 blk[8]; /* FNV-1a over each 1 KB block: where the bytes stop matching */
+	u8 head[16]; /* first bytes, the sub-header included */
+	u8 tail[16]; /* last bytes */
+} g_qoid_reject;
+
+#define QOID_REJ_SHORT 0x100u /* payload shorter than the sub-header */
+#define QOID_REJ_MAGIC 0x101u /* sub-header magic is not QOID_MAGIC */
+#define QOID_REJ_WINDOW 0x102u /* no window holds the named dictionary */
+
+static void qoid_record_reject(u32 rc, const u8 *data, u32 size, int slot)
+{
+	u32 sum = 0;
+	u32 i;
+
+	for (i = 0; i < size; i++)
+		sum += data[i];
+	for (i = 0; i < sizeof(g_qoid_reject.blk) / sizeof(g_qoid_reject.blk[0]); i++) {
+		u32 h = 2166136261u; /* FNV-1a, same constant the host recomputes */
+		u32 j;
+		u32 end = (i + 1) * 1024u;
+
+		if (end > size)
+			end = size;
+		for (j = i * 1024u; j < end; j++)
+			h = (h ^ data[j]) * 16777619u;
+		g_qoid_reject.blk[i] = h;
+	}
+	g_qoid_reject.rc = rc;
+	g_qoid_reject.size = size;
+	g_qoid_reject.slot = (u32)slot;
+	g_qoid_reject.sum = sum;
+	for (i = 0; i < sizeof(g_qoid_reject.head); i++)
+		g_qoid_reject.head[i] = i < size ? data[i] : 0;
+	for (i = 0; i < sizeof(g_qoid_reject.tail); i++)
+		g_qoid_reject.tail[i] = size >= sizeof(g_qoid_reject.tail) + i ?
+		                                data[size - sizeof(g_qoid_reject.tail) + i] :
+		                                0;
+	g_qoid_reject.count++;
+}
 #if DECODER_STATS
 volatile u32 g_qoid_stat_inflate_us;
 volatile u32 g_qoid_stat_hist_bytes;
@@ -916,12 +969,14 @@ void qoid_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *data, u32 size, int slot,
 		return;
 	if (size < QOID_HDR_SIZE) {
 		g_decoder_stat_qoid_bad++;
+		qoid_record_reject(QOID_REJ_SHORT, data, size, slot);
 		return;
 	}
 
 	h = (const struct qoid_header *)data;
 	if (h->magic != QOID_MAGIC) {
 		g_decoder_stat_qoid_bad++;
+		qoid_record_reject(QOID_REJ_MAGIC, data, size, slot);
 		return;
 	}
 
@@ -943,6 +998,7 @@ void qoid_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *data, u32 size, int slot,
 		}
 		if (win_idx == DECODER_FRAME_SLOTS) {
 			g_decoder_stat_qoid_mismatch++;
+			qoid_record_reject(QOID_REJ_WINDOW, data, size, slot);
 			return;
 		}
 		dict_len = h->dict_len;
@@ -959,6 +1015,7 @@ void qoid_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *data, u32 size, int slot,
 			g_decoder_stat_qoid_oversize++;
 		else
 			g_decoder_stat_qoid_bad++;
+		qoid_record_reject((u32)rc, data, size, slot);
 		return;
 	}
 
@@ -1057,14 +1114,15 @@ void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
 
 	/*
 	 * Lowest free slot, which is *not* the round-robin rotation DECODER_TYPE 6
-	 * wants: its dictionary lives in the slot, so the host would like to know
-	 * which band is resident where.  Slot k only holds the band submitted
+	 * would like: its dictionary lives in the slot, so the host would like to
+	 * know which band is resident where.  Slot k only holds the band submitted
 	 * k % DECODER_FRAME_SLOTS ago while the pipeline is saturated; a host slow
 	 * enough to keep one band in flight puts every band in slot 0 (measured:
 	 * 8 of 15 deltas refused).  A fill/drain cursor pair was tried and shown
 	 * to stall the pipeline under a full-screen load (303 submitted, 300
-	 * drawn, decoder_task blocked), so the mapping has to be fixed on the
-	 * protocol side -- see notes/decoders.md and notes/todo.md item 13.
+	 * drawn, decoder_task blocked), so the device now finds the dictionary by
+	 * the serial the payload names -- see notes/decoders.md and notes/todo.md
+	 * item 13.
 	 */
 	for (i = 0; i < DECODER_FRAME_SLOTS; i++) {
 		if (!s_frames[i].busy) {
