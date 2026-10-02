@@ -162,7 +162,7 @@ RLE 来自独立仓库 `rgb565-rle`（MIT），vendored 在 `src/decoders/rle/`�
 （端到端四列依次是 solid / gradient / photo / noise；由 `tools/codec_compare.py` 测，
 内容是同一份，只换编码器。）
 
-**结论：链路是瓶颈（EP1 约 1.1 MB/s），端到端快慢基本由压缩率决定。** 结构化内容 QOI 小
+**结论：链路是瓶颈（EP1 约 1.1 MB/s，实际 0.88~1.13 视主机而定），端到端快慢基本由压缩率决定。** 结构化内容 QOI 小
 1.4~1.7 倍（更快）；**高熵内容 RLE 反而小 1.45 倍** —— 它的 literal run 能把 128 个像素摊到
 一个控制字节（实测噪声 2.01 B/px），而 QOI 对高熵像素只能发 3 B/px 的 RGB565 op。解码本身
 两种都很快（160×120 单次传输差距 0.1~6 ms），所以选型看压缩率而不是解码速度。
@@ -199,6 +199,13 @@ literal run 直接字节拷贝（小端目标上压缩数据本身就是像素�
 
 **`PUD_MAX_TRANSFER` 不是瓶颈**：链路实测 **1.11~1.13 MB/s**，从每帧 11 KB 到 444 KB 都是平的
 （= 全速理论上限 1.216 MB/s 的 93%），CherryUSB 端口只给每个端点 64 B DPRAM 单缓冲
+
+> **速率是会话属性，引用要带主机条件。** 这里的 1.11~1.13（天花板 1.216 的 93%）已在
+> **RK Bus003 的 XHCI 口**（1.148 MB/s，94.4%）与**本机 root hub**（1.139 MB/s，94%）上复现。
+> 另有一个**有误导性的低值**：路径经过 **hub 的 TT** 时只有 **0.878 MB/s（72%）**，
+> 与 `notes/scripts-measurements.md` 早先实测的 0.817~0.833 同源，是**拓扑损耗、不代表设备能力**。
+> 数字与条件见
+> [`pico-display-lib/notes/performance-baseline.md`](../lib/pico-display-lib/notes/performance-baseline.md)。
 **不是瓶颈**。把 `PUD_MAX_TRANSFER` 从 64 KB 降到 32 KB：省 109 KB RAM，但设备侧多花 2~3%，
 而且**小载荷反而明显变慢**（纯色 4.6 → 6.5 ms/帧，band 数 8 → 15）。128 KB 之前量过是持平的。
 **结论：RP2350 保持 64 KB、RP2040 保持 32 KB。**
