@@ -729,18 +729,24 @@ def ffmpeg_frames(cmd, width, height):
 # Device
 # ---------------------------------------------------------------------------
 
-def open_device():
-    """Find the display and claim its interface."""
+def open_device(vid=VID, pid=PID):
+    """Find the display and claim its interface.
+
+    `vid`/`pid` default to the PUD panel.  They are parameters so that a test
+    or tool can look elsewhere without editing the module constants --
+    tests/common/harness.py forwards its --vendor/--product here, and that
+    keeps the USB identifiers in exactly one place.
+    """
     try:
         import usb.core
         import usb.util
     except ImportError:
         raise PudError("pyusb is required: pip install pyusb")
 
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
+    dev = usb.core.find(idVendor=vid, idProduct=pid)
     if dev is None:
         raise PudError("device %04x:%04x not found -- is it plugged in?"
-                       % (VID, PID))
+                       % (vid, pid))
 
     try:
         usb.util.claim_interface(dev, 0)
@@ -1132,10 +1138,23 @@ class Display:
 
     def get_sn(self):
         """Read the 8-byte board unique id."""
+        return self.send_query(CMD_GET_SN, 8, timeout=DEFAULT_TIMEOUT_MS)
+
+    def send_query(self, cmd, length, timeout=None):
+        """Send one ``REQ_EP2_IN`` query and read up to `length` bytes back.
+
+        The low-level half of every command on this channel, kept here so that
+        callers (and tests) do not each re-derive the 4-byte request header and
+        the bulk read.  An unsupported command answers with a zero-length
+        packet, which pyusb surfaces as a short read or a timeout on the bulk
+        transfer -- that *is* the documented "not supported" signal, so this
+        method does not hide it.
+        """
         self.dev.ctrl_transfer(
             TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_SN, 8))
-        return bytes(self.dev.read(EP2_IN_ADDR, 8, timeout=DEFAULT_TIMEOUT_MS))
+            struct.pack("<HH", cmd, length))
+        return bytes(self.dev.read(EP2_IN_ADDR, length,
+                                   timeout=int(timeout or DEFAULT_TIMEOUT_MS)))
 
     def query_caps(self, timeout=None):
         """Ask the device what it accepts (``PUD_CMD_GET_CAPS``).
@@ -1148,11 +1167,7 @@ class Display:
         parameters answers with the first 16 bytes and is accepted.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        self.dev.ctrl_transfer(
-            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_CAPS, CAPS_STRUCT.size))
-        raw = bytes(self.dev.read(EP2_IN_ADDR, CAPS_STRUCT.size,
-                                  timeout=timeout))
+        raw = self.send_query(CMD_GET_CAPS, CAPS_STRUCT.size, timeout=timeout)
         if len(raw) < CAPS_V1_SIZE:
             return None
         magic, proto_ver, frame_max, decoder_type = CAPS_V1.unpack(
@@ -1165,8 +1180,10 @@ class Display:
                 "rectangle now travels in the EP1 header, so update whichever "
                 "side is older" % (proto_ver, PUD_PROTO_VER))
 
-        self.caps = dict(proto_ver=proto_ver, frame_max=frame_max,
-                         decoder_type=decoder_type)
+        # `magic` is already checked above; it is reported too so a test can
+        # assert the framing it saw rather than infer it from a None return.
+        self.caps = dict(magic=magic, proto_ver=proto_ver,
+                         frame_max=frame_max, decoder_type=decoder_type)
         if len(raw) >= CAPS_STRUCT.size:
             (_magic, _proto, _frame_max, _decoder, xres, yres, pixelclock_khz,
              rotation, bpp, intf_type, tp_polling_period,
@@ -1205,11 +1222,8 @@ class Display:
         Returns ``settable``/``rejected`` masks plus the current values.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        self.dev.ctrl_transfer(
-            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_PARAM, PARAM_STATE_STRUCT.size))
-        raw = bytes(self.dev.read(EP2_IN_ADDR, PARAM_STATE_STRUCT.size,
-                                  timeout=timeout))
+        raw = self.send_query(CMD_GET_PARAM, PARAM_STATE_STRUCT.size,
+                              timeout=timeout)
         if len(raw) < PARAM_STATE_STRUCT.size:
             raise PudError(
                 "PUD_CMD_GET_PARAM answered %d of %d bytes -- firmware without "
