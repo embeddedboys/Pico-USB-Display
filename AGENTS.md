@@ -146,12 +146,20 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
     会长时间占着 USB 中断 —— 运行期参数通道因此把 `rotation` 拆成两半：中断里只记账
     （几何 + `indev_set_dir()`，都是几次赋值），MADCTL 写由 `decoder_task` 在画下一帧之前
     执行（`pud_params_flush_display()`，见 [notes/usb-protocol.md](notes/usb-protocol.md)）。
+12. **设备必须能自愈：看门狗监督任务不能去掉，也不能挪进被监视的任务里。**
+    `main.c` 的 `watchdog_supervisor_task()` 跑在 `tskIDLE_PRIORITY + 4`（高于 decoder +1 与
+    usb +3），所以某个任务卡在自旋里时它仍会被调度；它发现停顿后**停止喂**硬件看门狗，
+    由芯片复位。判据是 `submitted − dropped − drawn` 持续超时 —— **`dropped` 不能省**：
+    `decoder_submit_frame()` 丢帧时也计 `submitted`，只用 `submitted − drawn` 会在设备空闲
+    一秒后误复位一台正常的设备（已用主机状态机模拟验证）。原因写进
+    `watchdog_hw->scratch[0..1]`，跨复位存活，下次启动会打印恢复次数。
+    详见 [notes/qoid.md](notes/qoid.md) 的"自愈看门狗"一节。
 
 ## 当前配置（改前先读 notes）
 
 | 配置 | 值 | 说明 |
 | --- | --- | --- |
-| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验；驱动还不会发。**两块板都装得下** ✓ —— RP2040 上 3 帧槽实测 164 KB/264 KB，提交信息里"只 RP2350"的说法不成立 ✗；限制不在设备而在**等级**：主机侧默认已从 level 1 改成 6（字节 −11.2% → −26.6% ✓）。见 [notes/qoiz.md](notes/qoiz.md)）、`6`=QOI+deflate+跨帧字典（实验；持续负载下会**静默冻结**，未定位，见 [notes/qoid.md](notes/qoid.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
+| `DECODER_TYPE` | `3`（QOI） | 图片/视频脚本按 QOI 发；`0`=tjpgd、`1`=JPEGDEC、`2`=LZ4、`4`=RLE、`5`=QOI+deflate（实验；驱动还不会发。**两块板都装得下** ✓ —— RP2040 上 3 帧槽实测 164 KB/264 KB，提交信息里"只 RP2350"的说法不成立 ✗；限制不在设备而在**等级**：主机侧默认已从 level 1 改成 6（字节 −11.2% → −26.6% ✓）。见 [notes/qoiz.md](notes/qoiz.md)）、`6`=QOI+deflate+跨帧字典（实验；持续负载下曾**静默冻结**，根因经续查指向显示总线的无界 DMA 等待、**待真机验证**，现已由不变量 12 的自愈看门狗兜底，见 [notes/qoid.md](notes/qoid.md)）。**编号是协议字段**（`PUD_CMD_GET_CAPS` 上报），不要重排；现在是 cache 变量，`-DDECODER_TYPE=5` 另开构建目录 |
 | `OVERCLOCK_ENABLED` | `1` | 板配置 profile 1：RP2350 225 MHz（QSPI 75 MHz，VREG 1.10V）；实测结论见 [`notes/architecture.md`](notes/architecture.md) |
 | `PIO_USE_DMA` | `1` | 全刷 +12~16%，45 s 压测稳定；详见 [`notes/pitfalls-display.md`](notes/pitfalls-display.md) |
 | 面板 | ILI9488 / 8080 并口 / PIO，320×480 原生（`TFT_ROTATION 1` → 480×320） | 改分辨率要连带改驱动分带与 QOI 缓冲上限；**面板参数由 `PUD_CMD_GET_CAPS` 上报**，主机不再写死 |

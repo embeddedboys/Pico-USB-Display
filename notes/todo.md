@@ -82,7 +82,14 @@ band 乒乓"后设备侧快了 22~48%（见 [qoi.md](qoi.md)），而 RLE 的回
 - `PUD_CMD_GET_QOID`（0x05）设备侧**已应答**（60 B，含 `window`），但驱动仓
   `notes/usb-protocol.md` **尚未同步**这条命令与 `decoder_type=6`；
 - 照片/噪声内容超半窗会被拒（面板那块不更新），改成报错还是自动回退是产品决定；
-- **未解决**：持续负载下的静默冻结（见 TL;DR 第 2 条）；
+- **静默冻结（2026-10-02 续查）**：签名指向**显示总线上唯一无超时的等待**
+  （`tft_async_video_wait() → dma_channel_wait_for_finish_blocking()`），`tinyd` 已由宿主机
+  模糊测试排除；**根因待真机验证**。已由**自愈看门狗**兜底（`main.c` 的
+  `watchdog_supervisor_task()`，架构不变量 12）：停顿超时即停止喂硬件看门狗、由芯片复位，
+  恢复次数写进 `watchdog_hw->scratch[0..1]` 并在下次启动打印。详见 [qoid.md](qoid.md)。
+- **待办**：给 `i80_finish_pending()`/`i80_wait_idle()` 加**有界等待**（超时即
+  `dma_channel_abort()` + 复位 PIO SM + 重初始化总线），把"复位"降级成"一次可见的坏帧"；
+  改动在子模块 `lib/pico-display-lib`，**必须真机验证**。
 - **已办**：默认 `DECODER_TYPE=3` 的局刷回归（5 种窗口 `submitted 300 == drawn 300`、
   `dropped 0`、`oversize 0`、0.88~0.97 MB/s）。
 
