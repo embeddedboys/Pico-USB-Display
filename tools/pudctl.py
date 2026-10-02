@@ -377,6 +377,14 @@ def main(argv=None):
     except pud_usb.PudError as exc:
         print("ENVIRONMENT_ERROR: %s" % exc, file=sys.stderr)
         return EXIT_ENVIRONMENT_ERROR
+    except OSError as exc:
+        # usb.core.USBError is an OSError, so a transport failure lands here.
+        # The workspace convention reserves exit 1 for "the device answered and
+        # the answer was wrong"; "the hardware or the permissions are not
+        # there" is ENVIRONMENT_ERROR.  A traceback with exit 1 reads like the
+        # panel failed something it was never asked.
+        print("ENVIRONMENT_ERROR: %s" % exc, file=sys.stderr)
+        return EXIT_ENVIRONMENT_ERROR
     except KeyboardInterrupt:
         return EXIT_ENVIRONMENT_ERROR
 

@@ -734,6 +734,48 @@ def ffmpeg_frames(cmd, width, height):
 # Device
 # ---------------------------------------------------------------------------
 
+READY_TIMEOUT_S = 10.0
+READY_INTERVAL_S = 0.2
+
+
+def wait_ready(disp, timeout=READY_TIMEOUT_S, interval=READY_INTERVAL_S):
+    """Wait until the device answers a control request, and return its caps.
+
+    A device that has just been reset can enumerate before its application
+    starts servicing vendor requests, and then the first control transfer fails
+    with LIBUSB_ERROR_IO.  A single attempt cannot tell that from a transport
+    that is genuinely broken -- both are an I/O error.
+
+    This retries, and if the device still does not answer it reports what it
+    observed rather than guessing why: "did not answer after N seconds" is a
+    fact, while "still starting up" is a cause, and one that has already been
+    wrong once here (a device that never answered was called a startup delay).
+
+    Only transport errors are retried.  A PudError means the device answered
+    and the answer was wrong, which retrying would only hide; anything else
+    keeps whatever meaning its caller already gave it.
+    """
+
+    deadline = time.monotonic() + timeout
+    last = None
+
+    while True:
+        try:
+            return disp.query_caps()
+        except PudError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - classified just below
+            # 5 EIO, 110 ETIMEDOUT, 19 ENODEV: the transport is not up yet.
+            if getattr(exc, "errno", None) not in (5, 110, 19):
+                raise
+            last = exc
+            if time.monotonic() >= deadline:
+                raise PudError(
+                    "the device enumerated but did not answer a control "
+                    "request after %.0fs of retries (%s)" % (timeout, last))
+            time.sleep(interval)
+
+
 def open_device(vid=VID, pid=PID):
     """Find the display and claim its interface.
 
@@ -773,10 +815,10 @@ def open_device(vid=VID, pid=PID):
 
     disp = Display(dev)
     try:
-        disp.query_caps()
+        wait_ready(disp)
     except PudError:
-        # A protocol mismatch is not something to paper over: the transfer
-        # framing differs, so say so instead of failing on a mystery timeout.
+        # Either a protocol mismatch, which is not something to paper over, or
+        # a device that never came up -- both are worth reporting as they are.
         raise
     except Exception:
         # No capability report (an older firmware): keep the host defaults.
