@@ -92,6 +92,18 @@ struct pud_caps {
 };
 
 /*
+ * The wire size, stated where the compiler can check it.  `struct pud_caps` is
+ * a protocol field: the host unpacks a fixed layout, and a field inserted in
+ * the middle (rather than appended) would silently shift every value after it.
+ * 32 is what both sides ship today; the first 16 bytes are the pre-panel-field
+ * layout an older host still reads.  tests/test_protocol_constants.py compares
+ * this with the host mirror's struct.Struct size.
+ */
+#define PUD_CAPS_SIZE 32
+_Static_assert(sizeof(struct pud_caps) == PUD_CAPS_SIZE,
+               "pud_caps wire size (append only, never reorder)");
+
+/*
  * Capability flags.  Touch is optional: most board configs in
  * pico-display-lib set INDEV_DRV_NOT_USED=1 (no controller on the glass), and
  * the host must not register an input device for those.
@@ -137,6 +149,16 @@ struct pud_param_state {
 	u8 reserved;
 	u8 decoder;
 };
+
+/* Wire sizes of the parameter structs, checked where they are defined: the
+ * `reserved` byte in each exists precisely to keep the layout aligned with no
+ * hidden padding, and the host unpacks a fixed layout. */
+#define PUD_PARAMS_SIZE 8
+#define PUD_PARAM_STATE_SIZE 12
+_Static_assert(sizeof(struct pud_params) == PUD_PARAMS_SIZE,
+               "pud_params wire size");
+_Static_assert(sizeof(struct pud_param_state) == PUD_PARAM_STATE_SIZE,
+               "pud_param_state wire size");
 
 /*
  * EP1 OUT framing (protocol v2).
@@ -192,6 +214,12 @@ struct pud_qoid_state {
 	 * RP2040 -- so a host that assumes one number breaks on the other. */
 	u32 window;
 };
+
+/* Wire size, checked here like the other protocol structs: 9 u32 fields, no
+ * padding.  The host pins the same layout as pud_usb.QOID_STATE. */
+#define PUD_QOID_STATE_SIZE 60
+_Static_assert(sizeof(struct pud_qoid_state) == PUD_QOID_STATE_SIZE,
+               "pud_qoid_state wire size");
 
 struct disp_data {
 	u16 xres;
