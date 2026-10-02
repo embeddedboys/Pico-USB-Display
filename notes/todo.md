@@ -79,8 +79,9 @@ band 乒乓"后设备侧快了 22~48%（见 [qoi.md](qoi.md)），而 RLE 的回
 - DELTA 已不依赖流水线打满（设备按载荷报的序号找窗口，主机取最近一条同矩形条带）；
   慢主机 `qoid_mismatch 0`、整屏 `hist_bytes = 318012`；
 - **垂直增量收益不成立**（载荷只降 3.0%，帧时间没改善）；
-- `PUD_CMD_GET_QOID`（0x05）设备侧**已应答**（60 B，含 `window`），但驱动仓
-  `notes/usb-protocol.md` **尚未同步**这条命令与 `decoder_type=6`；
+- `PUD_CMD_GET_QOID`（0x05）设备侧**已应答**（60 B，含 `window`）；协议两侧文档
+  **已同步**（驱动仓权威文档现在有 `0x03`–`0x05` 与 `decoder_type=6`，驱动明确不发送、
+  不编码 6）；
 - 照片/噪声内容超半窗会被拒（面板那块不更新），改成报错还是自动回退是产品决定；
 - **静默冻结（2026-10-02 续查）**：签名指向**显示总线上唯一无超时的等待**
   （`tft_async_video_wait() → dma_channel_wait_for_finish_blocking()`），`tinyd` 已由宿主机

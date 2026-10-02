@@ -54,9 +54,13 @@ typedef signed int s32;
  * struct pud_caps -- the caps struct is a protocol field the driver already
  * parses at a fixed size, and an unknown command is simply never sent.
  *
- * NOT ANSWERED YET: the handler existed and hung the pipeline on hardware, so
- * it was pulled; the shapes are kept because they are the design.  See
- * notes/todo.md item 13 before wiring it up. */
+ * Answered since 2026-10: the EP2 FSM in usb.c handles it and
+ * qoid_read_state() fills the struct (a build without dictionary windows
+ * answers magic plus zero slots, so a host can tell "no windows" from
+ * "command unknown").  It is a query, so the host pays only when it asks --
+ * one costs about 2.9 ms, twenty times a control transfer, so ask at most
+ * once per frame.  The kernel driver does not send it yet; the authoritative
+ * definition is PUD-kernel-drivers/notes/usb-protocol.md. */
 #define PUD_CMD_GET_QOID 0x05
 
 /* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The

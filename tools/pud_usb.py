@@ -428,10 +428,15 @@ QOID_WINDOWS = 4
 #: `Display.delta_win` carries the value the host builds against.
 PUD_DELTA_WIN = 32 * 1024
 
-#: Device frame slots (DECODER_FRAME_SLOTS in the firmware).  Slots are handed
-#: out round-robin, so the k-th submission of a session lands in slot
-#: k % DECODER_FRAME_SLOTS and finds the band submitted that many submissions
-#: earlier.  `Display.frame_slots` carries it.
+#: Device frame slots (DECODER_FRAME_SLOTS in the firmware).  The slot a band
+#: lands in is the lowest free one, so it is *not* `submission % slots` unless
+#: the pipeline happens to be saturated -- which is why a `DECODER_TYPE 6`
+#: delta names the band its dictionary was built from (`dict_serial`) instead
+#: of the host predicting a slot.  `Display.frame_slots` carries it.
+#:
+#: `PUD_CMD_GET_CAPS` does not report this number, so it is a host-side
+#: constant; getting it wrong does not corrupt the picture, it only makes the
+#: device refuse deltas and count `g_decoder_stat_qoid_mismatch`.
 DECODER_FRAME_SLOTS = 3
 
 
