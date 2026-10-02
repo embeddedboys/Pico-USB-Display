@@ -61,6 +61,21 @@ static uint16_t qoi_buf_b[QOI_BATCH_PIXELS];
 #if QOI_NONCALLBACK >= 2
 /* Two whole-band buffers: one is being written to the panel while the next
  * band is decoded into the other (see qoi_drawimg). */
+/*
+ * The DECODER_STATS counters themselves.  decoder_internal.h declares them
+ * extern because the QOI, RLE, QOIZ and QOID paths all accumulate into them,
+ * so exactly one translation unit has to own the storage -- and it has to be
+ * one that is always compiled, which this one is (every build includes the QOI
+ * source list, whatever DECODER_TYPE selects).
+ */
+#if DECODER_STATS
+volatile u32 g_qoi_stat_draw_us;  /* whole qoi_drawimg() */
+volatile u32 g_qoi_stat_flush_us; /* time inside tft_video_flush() */
+volatile u32 g_qoi_stat_pixels;   /* pixels flushed */
+volatile u32 g_qoi_stat_calls;    /* qoi_flush() calls */
+volatile u32 g_qoi_stat_frames;   /* qoi_drawimg() calls */
+#endif
+
 static uint16_t qoi_band[2 * PUD_BAND_MAX_PIXELS] __attribute__((aligned(4)));
 static unsigned qoi_band_next;
 #elif QOI_NONCALLBACK
