@@ -1,6 +1,9 @@
-build-pico2
-build-pico
-build
+# CMake build trees.  `build-*/` covers the per-experiment directories the
+# decoder work needs (build-pico2-qoiz, build-pico2-qoistat, ...) as well as the
+# plain build-pico2/build-pico/build; `build.sh` is a tracked file, not a
+# directory, so the pattern cannot match it.
+build/
+build-*/
 .cache
 __pycache__
 .venv
