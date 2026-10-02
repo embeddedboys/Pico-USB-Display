@@ -38,9 +38,10 @@ SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -Wl,--print-me
 SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -Wl,--print-memory-usage")
 
 set(PICO_DISPLAY_LIB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-display-lib)
-# The library's own copies of the panel configs.  The build includes this
-# repository's configs/ instead (see PUD_CONFIG below) -- same files, but a local
-# panel tweak then stays here rather than going into the library.
+# configs/ is a symlink to the library's configs/ (git mode 120000), so there is
+# exactly one copy of the panel configs and both repositories see the same files.
+# Editing one from here therefore edits the submodule -- it does not keep a local
+# tweak out of the library.
 set(PICO_DISPLAY_LIB_CONFIG_PATH ${PICO_DISPLAY_LIB_PATH}/configs)
 set(CHERRY_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/CherryUSB)
 set(LZ4_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/lz4)
@@ -54,11 +55,10 @@ pico_sdk_init()
 
 # **********  select the suitable config file  **********
 #
-# The panel config comes from this repository's own configs/ directory -- the same
-# set the library ships, but a local tweak of one panel then stays here instead of
-# going into the library.  `./build.sh lunch` records the choice in .pud-config and
-# passes it as PUD_CONFIG; a plain `cmake ..` (or a checkout that has never run
-# lunch) builds the default below.
+# The panel config comes from configs/, which is a symlink to the library's own
+# configs/ -- one copy, shared.  `./build.sh lunch` records the choice in
+# .pud-config and passes it as PUD_CONFIG; a plain `cmake ..` (or a checkout that
+# has never run lunch) builds the default below.
 set(PUD_CONFIG "pico_dm_qd3503728" CACHE STRING
     "panel config from configs/ (see ./build.sh configs)")
 set(PUD_CONFIG_DIR ${CMAKE_CURRENT_LIST_DIR}/configs CACHE PATH
