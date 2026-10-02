@@ -58,11 +58,13 @@
  * application task (decoder is idle+1, usb idle+3), so the tick still schedules
  * it while the decoder spins.
  *
- * What it watches is work that is outstanding but not finishing: `submitted >
- * drawn` unchanged for PUD_STALL_MS.  When the device is idle the two are
- * equal, so an idle panel is not a stall, and no knowledge of the frame-slot
+ * What it watches is work that is outstanding but not finishing: `submitted -
+ * dropped - drawn` unchanged for PUD_STALL_MS.  When the device is idle that is
+ * zero, so an idle panel is not a stall, and no knowledge of the frame-slot
  * count is needed (that constant is private to decoder.c and copying it here
- * would be one more thing to keep in step).
+ * would be one more thing to keep in step).  The `dropped` term is not
+ * optional -- see the counters below for why leaving it out would reset a
+ * working device.
  *
  * Recovery is the chip's hardware watchdog, not a state reset this task would
  * have to do on a task that may be holding the panel bus mid-transfer.  On a
@@ -140,7 +142,9 @@ void vApplicationMallocFailedHook(void)
  * necessarily fire for it.  Without this, an over-committed heap shows up as a
  * missing task and a device that half works.
  *
- * The decoder task's creation is inside decoder.c and is not checked here.
+ * The decoder task's creation is inside decoder.c, because it owns that task
+ * and its stack budget; decoder_init() checks its own xTaskCreate() the same
+ * way.
  */
 static void check_task_created(BaseType_t rc, const char *name)
 {
