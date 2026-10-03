@@ -1,5 +1,32 @@
 # AGENTS.md
 
+## Skills（本仓遵守）
+
+本仓的一切工作遵循工作区 `../AGENTS.md` 约定的四份 skill。**摘要随仓携带**（离线可读），
+完整版在工作区 `skills/`。
+
+| skill | 本仓副本 | 一句话 |
+| --- | --- | --- |
+| Repository Exploration | [`skills/developer-repository-exprolation/Summary.md`](skills/developer-repository-exprolation/Summary.md) | 先理解再修改；证据优先于直觉 |
+| Knowledge | [`skills/developer-knowledge/Summary.md`](skills/developer-knowledge/Summary.md) | 首屏结论、事实分级、信息预算、漂移检查 |
+| Testing | [`skills/developer-testing/Summary.md`](skills/developer-testing/Summary.md) | tests/tools 分层、oracle 声明、退出码、N 次测量 |
+| Code Quality | [`skills/developer-code-quality/Summary.md`](skills/developer-code-quality/Summary.md) | **能跑 ≠ 完成**；可读性有硬标准 |
+
+### 动手前的四行闸门（**强制**）
+
+改任何代码或配置**之前**先写出这四行 ✓。**第 1 行或第 4 行写不出来就停手** ✗ —— 那是在猜 ✗。
+
+```text
+已验证：<确认了什么，凭据是什么：代码/实测/构建日志>
+仍未知：<还没确认的；不许用推测填空>
+最小改动：<只改一处，为什么是这一处>
+生效验证：<如何证明改动真的生效：探针 / grep 生成物 / 构建日志里的编译行>
+```
+
+**先确认仪器，再相信读数** ✓ —— 宏没被注入、文件没被编译、配置被 defconfig 覆盖，
+这三件事的症状都是"结果莫名其妙" ✗。
+
+
 > 本仓库是 RP2350（Pico 2）上的 USB 显示固件（FreeRTOS + CherryUSB + PIO 8080 TFT）。
 > 通用知识库/测试约定见工作区根 [`../AGENTS.md`](../AGENTS.md)；详细知识见 [`notes/`](notes/README.md)。
 > 本文只写"必须遵守的约束"和入口；细节一律在 notes，改动前先读。
