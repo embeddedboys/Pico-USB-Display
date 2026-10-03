@@ -211,3 +211,10 @@ cd build-pico2 && cmake .. -DPICO_BOARD=pico2 && cmake --build . -j8
 - 知识库索引：[notes/README.md](notes/README.md)
 - 通用知识库/测试/退出码/敏感信息约定：工作区根 [`../AGENTS.md`](../AGENTS.md)
 - 协议权威定义：`PUD-kernel-drivers/notes/usb-protocol.md`（本仓那份是设备侧镜像）
+
+## 驱动工具的方式（与工作区规范同源）
+
+- **不许盲目 `sleep`，不许 blanket 超时** ✓ —— 用**轮询就绪**（0.2 s 间隔）+ **秒级超时** ✓。
+  硬件测试必须**显式定义就绪检测**，不要依赖"设备恰好已经跑着" ✓。
+- 反例：`sleep 22` + `timeout 300` ⇒ 明明 0.4 s 就有结论的操作拖到几分钟 ✗。
+- 正解：`usb.core.find` 轮询 ✓、控制请求 0.5 s 超时 ✓、shell 命令 `timeout 10` ✓。
