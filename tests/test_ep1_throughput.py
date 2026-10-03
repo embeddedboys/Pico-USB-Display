@@ -41,12 +41,18 @@ from harness import (Oracle, Report, Snapshot, Test,  # noqa: E402
                      Inconclusive, run_test)
 import measure  # noqa: E402
 
-# USB 2.0 full-speed is 12 Mbit/s.  A bulk endpoint can carry at most one
-# 64-byte packet per 1 ms frame, and 19 packets fit per 1 ms frame
-# (19 x 64 B x 1000 /s = 1.216 MB/s), which is the standard's ceiling for this
-# endpoint.  Nothing in this project can exceed it, so a number above it means
-# the measurement is wrong (a short timing loop, or a cached reply), not that
-# the hardware got faster.
+# USB 2.0 defines a bulk ceiling per speed, and both come from the standard's
+# own framing rather than from any measurement:
+#
+#   full-speed : 19 x 64 B per 1 ms frame            = 1.216 MB/s
+#   high-speed : 13 x 512 B per 125 us microframe    = 53.248 MB/s
+#
+# Which one applies is a property of the *link*, so it is chosen from the
+# negotiated speed.  Asserting the full-speed bound against a high-speed device
+# reports a failure for working hardware -- the number is not suspicious, the
+# oracle is.  Nothing in this project can exceed the applicable ceiling, so a
+# number above it means the measurement is wrong (a short timing loop, or a
+# cached reply), not that the hardware got faster.
 #
 # A *lower* bound is deliberately NOT asserted: no specification in this repo
 # states a minimum EP1 throughput.  The repo's measured range on a direct root
@@ -56,17 +62,34 @@ import measure  # noqa: E402
 # reader should use instead.
 #
 # ORACLE: SPEC
-# SOURCE: USB 2.0 full-speed bulk ceiling (19 x 64 B per 1 ms frame);
+# SOURCE: USB 2.0 bulk ceiling for the negotiated speed -- 19 x 64 B per 1 ms
+#         frame at full-speed, 13 x 512 B per 125 us microframe at high-speed;
 #         topology context from notes/scripts.md
-# EXPECTED: measured throughput <= 1.216 MB/s
+# EXPECTED: measured throughput <= the ceiling for this link's speed
+#           (1.216 MB/s full-speed / 53.248 MB/s high-speed)
 ORACLE = Oracle(
     "SPEC",
-    "USB 2.0 full-speed bulk transfer ceiling for a 64-byte-MPS endpoint "
-    "(19 x 64 B / 1 ms); notes/scripts.md for the measured root-port and "
-    "hub-TT figures this run is compared against",
-    "no sweep height may exceed 1.216 MB/s (a physical bound; exceeding it "
-    "means the measurement is invalid)",
+    "USB 2.0 bulk transfer ceiling for the endpoint's speed: 19 x 64 B / 1 ms "
+    "(full-speed, MPS 64) or 13 x 512 B / 125 us (high-speed, MPS 512); "
+    "notes/scripts.md for the measured root-port and hub-TT figures",
+    "no sweep height may exceed the ceiling of the negotiated speed (a "
+    "physical bound; exceeding it means the measurement is invalid)",
     "no throughput floor is asserted -- none is specified in this repo")
+
+# 13 x 512 B per 125 us microframe.
+HS_BULK_CEILING_MBPS = 13 * 512 * 8000 / 1e6
+
+
+def bulk_ceiling_mbps(dev):
+    """Physical EP1 ceiling for the link actually in use.
+
+    pyusb reports the negotiated speed as an integer (3 = high-speed).  A
+    device that reports nothing is treated as full-speed, which is the
+    conservative choice: it keeps the tighter bound when unsure.
+    """
+    usb_dev = getattr(dev, "dev", dev)
+    return (HS_BULK_CEILING_MBPS if getattr(usb_dev, "speed", None) == 3
+            else measure.USB_FS_THEORETICAL_MBPS)
 
 HEIGHTS = (8, 16, 32, 64, 128, 320)
 
@@ -113,21 +136,22 @@ def check(dev, args):
     best = max(rows, key=lambda r: r["mb_per_s"])
     snaps.append(Snapshot("topology_speed_mb_per_s",
                           round(worst["mb_per_s"], 3), "MB/s"))
-    snaps.append(Snapshot("ceiling_mb_per_s",
-                          measure.USB_FS_THEORETICAL_MBPS, "MB/s"))
+    ceiling = bulk_ceiling_mbps(dev)
+    snaps.append(Snapshot("ceiling_mb_per_s", ceiling,
+                          "MB/s (negotiated speed %s)"
+                          % (getattr(getattr(dev, "dev", dev), "speed", "?"),)))
     rates = [r["mb_per_s"] for r in rows]
     snaps.append(Snapshot("dispersion_across_heights",
                           "%.3f..%.3f MB/s (spread %.1f%%)"
                           % (min(rates), max(rates),
                              100.0 * (max(rates) - min(rates)) / max(rates))))
 
-    if worst["mb_per_s"] > measure.USB_FS_THEORETICAL_MBPS:
-        failures.append("%.3f MB/s exceeds the full-speed bulk ceiling %.3f "
-                        "MB/s -- the measurement is invalid, not the hardware "
+    if worst["mb_per_s"] > ceiling:
+        failures.append("%.3f MB/s exceeds the bulk ceiling %.3f MB/s for this "
+                        "link -- the measurement is invalid, not the hardware "
                         "(check that the payload is not cached and that the "
                         "timer wraps the whole sweep)"
-                        % (worst["mb_per_s"],
-                           measure.USB_FS_THEORETICAL_MBPS))
+                        % (worst["mb_per_s"], ceiling))
 
     flat = (max(rates) - min(rates)) / max(rates) < 0.10
     interpretation = ("rate is flat across payload sizes => link-limited "

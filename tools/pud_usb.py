@@ -43,6 +43,7 @@ import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 # ---------------------------------------------------------------------------
@@ -151,6 +152,7 @@ USB_TRANS_MAX_SIZE = 65535
 #: (PUD_MAX_BAND_PIXELS), which costs nothing in sustained throughput.
 PUD_MAX_BAND_PIXELS = (USB_TRANS_MAX_SIZE - EP1_HEADER_SIZE - 16) // 3
 
+EP2_PREPOST_DELAY_S = 0.05   # let the read reach the host controller first
 DEFAULT_TIMEOUT_MS = 5000
 
 #: EP4 touch report, 8 bytes, byte-explicit (see notes/usb-protocol.md):
@@ -1197,11 +1199,35 @@ class Display:
         transfer -- that *is* the documented "not supported" signal, so this
         method does not hide it.
         """
+        # Post the read before the request, not after.
+        #
+        # The device arms its EP2 answer while the control transfer is still in
+        # flight, and the ArtInChip UDC reports that transfer complete even when
+        # the host has not polled yet -- so a read issued afterwards blocks until
+        # it times out and the answer is gone.  Reading first is correct on both
+        # platforms; the RP2350 merely tolerates the other order.
+        # See zx-rtt-sdk/notes/usb.md.
+        result = {}
+
+        def _reader():
+            try:
+                result["data"] = bytes(
+                    self.dev.read(EP2_IN_ADDR, length,
+                                  timeout=int(timeout or DEFAULT_TIMEOUT_MS)))
+            except Exception as exc:  # re-raised below, in the caller's thread
+                result["error"] = exc
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        time.sleep(EP2_PREPOST_DELAY_S)
         self.dev.ctrl_transfer(
             TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
             struct.pack("<HH", cmd, length))
-        return bytes(self.dev.read(EP2_IN_ADDR, length,
-                                   timeout=int(timeout or DEFAULT_TIMEOUT_MS)))
+        reader.join()
+
+        if "error" in result:
+            raise result["error"]
+        return result.get("data", b"")
 
     def query_caps(self, timeout=None):
         """Ask the device what it accepts (``PUD_CMD_GET_CAPS``).
