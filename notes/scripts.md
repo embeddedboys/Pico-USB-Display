@@ -1,8 +1,15 @@
-# 用户空间工具（tools/）与验证脚本（tests/）
+# 用户空间工具（`tools/`）与验证脚本（`tests/`）
 
-固件烧好之后，不必加载内核驱动就能验证全部功能：这些脚本直接用 pyusb 跟设备
-说话，走的正是驱动使用的那套协议。调试显示链路、量测带宽、验证解码器时，
-这条路比反复 `insmod`/`rmmod` 快得多。
+> 固件烧好后**不必加载内核驱动**就能验证全部功能：这些脚本用 pyusb 直连设备，走的正是驱动
+> 使用的那套协议 —— 调试显示链路、量带宽、验证解码器时比反复 `insmod`/`rmmod` 快得多。
+
+## TL;DR
+
+- 依赖只需 `pyusb`；`Pillow` 替代 `opencv-python`（体积差约 20 倍），`numpy`/`ffmpeg`/`lz4` 可选。
+- 免 root 靠仓库根 `60-pico-usb-display.rules`；**文件名里的 `60-` 不能退回 `50-`**。
+- **全仓库只有一份编码器**（`tools/pud_usb.py` 的 `ENCODERS`），新脚本必须复用它。
+- 量吞吐前先看拓扑：**全速设备别挂在 hub 后面**（经 hub 0.833 MB/s 对直插根口 1.132 MB/s，+36%）。
+- **给设备计时必须把编码放在循环外**；绝对 MB/s 是会话属性，只有比值能搬。
 
 ## 依赖
 
@@ -13,8 +20,6 @@ sudo apt install ffmpeg           # 只放视频/录屏时需要
 pip install lz4                   # 只在测 LZ4 解码器时需要
 ```
 
-选型说明（本项目实测）：
-
 | 库 | 体积 | 用途 |
 | --- | --- | --- |
 | `pyusb` | 小 | **必需**，唯一的硬依赖 |
@@ -22,33 +27,28 @@ pip install lz4                   # 只在测 LZ4 解码器时需要
 | `numpy` | ≈20 MB | 只用于把 RGB565 打包从 26 ms 降到 2 ms（整帧）；**不是必需** |
 | `ffmpeg` CLI | 系统包 | 视频解码与录屏，走 rawvideo 管道，无需 Python 绑定 |
 
-用 Pillow 而不是 `opencv-python`：功能重合，体积差约 20 倍。`numpy` 缺席时
-`pud_usb` 会回退到纯 Python 打包路径（实测 480×320 用 26 ms，结果字节一致）。
+用 Pillow 而不是 `opencv-python`：功能重合，体积差约 20 倍。`numpy` 缺席时 `pud_usb` 会回退
+到纯 Python 打包路径（实测 480×320 用 26 ms，结果字节一致）。
 
 ## 免 root
-
-仓库自带的 udev 规则让设备对普通用户可写：
 
 ```bash
 sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-> **文件名里的 `60-` 不是随便取的**：udev 把 `/etc` 与 `/usr/lib` 的规则按字典序
-> 合并执行，`/usr/lib/udev/rules.d/50-udev-default.rules` 会把 usb 设备设成
-> `MODE="0664"`。规则若叫 `50-...` 会排在它**之前**而被覆盖，等于没生效
-> （表现为 pyusb 报 `[Errno 13] Access denied`）。
+> **文件名里的 `60-` 不是随便取的**：udev 把 `/etc` 与 `/usr/lib` 的规则按字典序合并执行，
+> `/usr/lib/udev/rules.d/50-udev-default.rules` 会把 usb 设备设成 `MODE="0664"`。规则若叫
+> `50-...` 会排在它**之前**而被覆盖，等于没生效（表现为 pyusb 报 `[Errno 13] Access denied`）。
 
 ## 共享模块 `pud_usb.py`
 
-所有脚本都从它取协议常量、QOI 编码器、坐标转换与设备句柄，**全仓库只有这一个
-QOI 编码器**（与固件/驱动共用的 `rgb565_qoi.c` 逐字节一致，自检见下）。
+所有脚本都从它取协议常量、编码器、坐标转换与设备句柄，**全仓库只有这一个 QOI/RLE 编码器**
+（与固件/驱动共用的 `rgb565_qoi.c` 逐字节一致，自检见下）。
 
 ```bash
 python3 tools/pud_usb.py      # 自检：对照 C 库参考向量校验编码器
 ```
-
-主要接口：
 
 | 接口 | 作用 |
 | --- | --- |
@@ -56,49 +56,46 @@ python3 tools/pud_usb.py      # 自检：对照 C 库参考向量校验编码器
 | `Display.send_rgb565(px, w, h, x, y)` | 发一个矩形，必要时按驱动规则分带 |
 | `Display.send_raw(payload, ...)` | 发已压缩的数据（非 QOI 编码器或测试用） |
 | `Display.get_sn()` | 读 8 字节板子唯一 ID |
-| `Display.query_caps()` | 问设备能力（`PUD_CMD_GET_CAPS`）：`frame_max` / `decoder_type` |
+| `Display.query_caps()` | 问设备能力（`PUD_CMD_GET_CAPS`）：`frame_max` / `decoder_type` / `band_pixels` |
+| `Display.set_params()` / `get_params()` | 运行期参数通道（`SET_PARAM`/`GET_PARAM`） |
 | `load_image(path, w, h, fit)` | 解码图片为 RGB888（Pillow→cv2 依次尝试） |
-| `video_frames(path, w, h, fps, fit)` | ffmpeg 管道逐帧产出 RGB888 |
-| `ffmpeg_frames(cmd, w, h)` | 通用 ffmpeg 取帧（录屏脚本复用它） |
-| `qoi_encode(px)` / `rle_encode(px)` | 编码器，各自与 C 库逐字节一致（自检验证） |
+| `video_frames(path, w, h, fps, fit)` / `ffmpeg_frames()` | ffmpeg 管道逐帧产出 RGB888 |
+| `qoi_encode(px)` / `rle_encode(px)` / `lz4_encode()` | 编码器，各自与 C 库逐字节一致（自检验证） |
 | `rgb888_to_rgb565()` / `crop_rgb565()` | 像素工具 |
 
-`send_*` 会校验矩形是否越出面板（超界直接报错，而不是发出一个被硬件裁掉的窗口），
-也会按**设备上报**的 `frame_max` 校验载荷大小（`open_device()` 时问一次，见下）。
+`send_*` 会校验矩形是否越出面板（超界直接报错），也会按**设备上报**的 `frame_max` 校验载荷大小
+（`open_device()` 时问一次）。
 
 ## 脚本一览
 
 **三个目录，各管一件事**：
 
-- `tools/` 放工具与演示（发图、播放、录屏、生成 bootlogo，以及 C 写的离线转换器
-  `pudcodec`），共享库 `tools/pud_usb.py` 也在那里 —— 工具和测试都 import 它。
-- `tests/` 放**验证脚本**：目的是"跑一遍给出对/错"（读回核对、退出码非零即失败）。
-  它们各自 `sys.path.insert` 到 `tools/` 才能 import `pud_usb`，所以**从仓库根目录跑**，
-  别单独 `cd tests`。
-- `scripts/` 是**构建脚本**（`build.sh` / `lunch.sh` / `flash.sh` / `config-info.sh`，
-  由根目录 `./build.sh` 调用），跟设备无关，见 [build-and-flash.md](build-and-flash.md)。
-
-三个目录都不需要内核驱动，前面两个都用 pyusb 直连。
+- `tools/` 放工具与演示（发图、播放、录屏、生成 bootlogo，以及 C 写的离线转换器 `pudcodec`），
+  共享库 `tools/pud_usb.py` 也在那里 —— 工具和测试都 import 它。
+- `tests/` 放**验证脚本**：跑一遍给出对/错（读回核对、退出码非零即失败），各自
+  `sys.path.insert` 到 `tools/` 才能 import `pud_usb`，所以**从仓库根目录跑**。
+- `scripts/` 是**构建脚本**（`build.sh` / `lunch.sh` / `flash.sh` / `config-info.sh`），
+  与设备无关，见 [build-and-flash.md](build-and-flash.md)。
 
 | 脚本 | 作用 | 依赖 |
 | --- | --- | --- |
 | `tools/img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
 | `tools/video_player.py` | 播放视频（不落盘，`--codec` 同上） | ffmpeg |
 | `tools/fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
-| `tests/ep1_out_speed_test.py` | EP1 纯带宽扫描 | 无 |
-| `tests/ep2_protocal_test.py` | EP2 查询通道测试 | 无 |
-| `tests/param_test.py` | 运行期参数通道测试（`SET_PARAM`/`GET_PARAM`）：调暗/调亮并读回、转一次朝向并核对 caps 几何跟着交换，再验不受支持的字段被如实上报 | 无 |
-| `tests/rotation_test.py` | **单独的旋转测试**：四种朝向走一遍，每种按 caps 报的几何画一张非对称图案（绿箭头指逻辑上边 + 朝向号 + 尺寸）发过去，看画面是否始终正立 | Pillow |
-| `tests/touch_test.py` | EP4 触摸上报测试（`--mode push/poll`、`--calibrate`） | 无 |
-| `tools/touch_draw.py` | **屏上触摸反馈**：摸哪里就在面板上画哪里（`--mode trace/grid/targets`） | numpy |
+| `tools/touch_draw.py` | 屏上触摸反馈（`--mode trace/grid/targets`） | numpy |
 | `tools/codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
-| `tools/desktop_codecs.py` | **桌面负载**：按“桌面会脏的矩形”比较编解码器 | numpy |
+| `tools/desktop_codecs.py` | **桌面负载**：按"桌面会脏的矩形"比较编解码器 | numpy |
 | `tools/xorg_desktop_share.py` | 把 X11 桌面镜像到面板（只发变化区域） | ffmpeg + X11 |
-| `tools/mkbootlogo.py` | 从 `assets/bootlogo.png` 重新生成 `include/bootlogo.h`（四个分支，落盘前自校验；`--check` 只比对） | 无（需 `tools/build/pudcodec`） |
+| `tools/mkbootlogo.py` | 从 `assets/bootlogo.png` 重新生成 `include/bootlogo.h`（四分支，落盘前自校验；`--check` 只比对） | `tools/build/pudcodec` |
+| `tests/test_ep1_throughput.py` | EP1 纯带宽扫描 | 无 |
+| `tests/test_ep2_query.py` | EP2 查询通道测试 | 无 |
+| `tests/test_param_channel.py` | 运行期参数通道测试（调暗/调亮并读回、转朝向并核对 caps 几何、验不支持字段如实上报） | 无 |
+| `tests/test_rotation_geometry.py` | 四种朝向各画一张非对称图案，看画面是否始终正立 | Pillow |
+| `tests/test_touch_ep4.py` | EP4 触摸上报测试（推送/轮询、标定） | 无 |
+| `tests/test_protocol_constants.py` / `test_encoder_reference.py` / `test_codec_crosscheck.py` | 协议结构体尺寸、编码器参考向量、`pudcodec` 对拍 | 无 |
 
-> 发图统一走 `img_viewer.py`，LZ4 用 `img_viewer.py --codec lz4` —— 原来那个
-> `lz4_img_viewer.py` 与它完全重复（脚本自己的 docstring 就写了"`--codec lz4` does the
-> same thing"），已删；同样需要 `DECODER_TYPE=2` 的固件，脚本会先读 caps 校验再发。
+> 发图统一走 `img_viewer.py`，LZ4 用 `img_viewer.py --codec lz4` —— 原来那个 `lz4_img_viewer.py`
+> 与它完全重复，已删。同样需要 `DECODER_TYPE=2` 的固件，脚本会先读 caps 校验再发。
 
 典型用法：
 
@@ -108,11 +105,51 @@ python3 tools/img_viewer.py --width 160 --height 120 --x 100 --y 60 -r 50 assets
 python3 tools/video_player.py --fps 8 --frames 200 ~/Videos/jazz.mp4
 python3 tools/fps_bench.py --frames 200
 python3 tools/fps_bench.py --dry-run          # 不接设备也能看各用例载荷大小
-python3 tests/ep1_out_speed_test.py
+python3 tests/test_ep1_throughput.py
 python3 tools/xorg_desktop_share.py --fps 15 --stats
 ```
 
 ## 实测数据（供对照）
+
+### ESP32-S3 + ILI9488（2026-10-04）
+
+使用 `pico_dm_qd3503728_esp32s3_idf` 当前固件、QOI 解码器和 USB 全速连接实测。
+设备能力为 `480x320`、`rotation=1`、`touch=True`、`proto_ver=2`、
+`frame_max=32768`。测试命令：
+
+```bash
+python3 tools/fps_bench.py --frames 30 --pattern solid,gradient,photo,noise
+python3 tests/ep1_out_speed_test.py --frames 60
+```
+
+EP1 吞吐在大载荷下稳定约 **0.947 MB/s**，对应结果如下：
+
+| 窗口高 | 字节/帧 | MB/s | fps | ms/帧 |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 11115 | 0.937 | 84.3 | 11.87 |
+| 16 | 22235 | 0.947 | 42.6 | 23.47 |
+| 32 | 44497 | 0.945 | 21.2 | 47.08 |
+| 64 | 88914 | 0.947 | 10.7 | 93.87 |
+| 128 | 177814 | 0.947 | 5.3 | 187.67 |
+| 320 | 444466 | 0.947 | 2.1 | 469.24 |
+
+端到端 FPS：
+
+| 用例 | 分带/窗口 | 载荷 | fps | 压缩吞吐 |
+| --- | --- | ---: | ---: | ---: |
+| full solid | 15 段 | 2772 B | 6.09 | 0.017 MB/s |
+| full gradient | 15 段 | 32996 B | 6.04 | 0.199 MB/s |
+| full photo | 15 段 | 131315 B | 6.02 | 0.790 MB/s |
+| full noise | 15 段 | 444658 B | 2.13 | 0.947 MB/s |
+| partial | 64x64 | 3558 B | 99.61 | 0.354 MB/s |
+| partial | 128x64 | 6904 B | 97.20 | 0.671 MB/s |
+| partial | 480x8 | 3270 B | 101.22 | 0.331 MB/s |
+
+结论：大载荷的 USB 有效吞吐约 `0.95 MB/s`，全屏噪声和照片分别受 USB
+带宽明显限制；当前固件的全屏分带刷新约 `6 FPS`，局部刷新约 `100 FPS`。
+同一测试中纯色全屏改为单次传输可达到约 `121 FPS`，说明全屏分带和面板刷新
+次数是独立的性能瓶颈。该单次传输结果仅作为协议/设备基准，不代表当前驱动的
+分带刷新路径。
 
 在同一块板子、`PIO_USE_DMA=1` 的固件上：
 
@@ -202,28 +239,26 @@ GNOME/Wayland 的坑）、两套真实内容（整屏缩放到 480×320 / 4K 里
 > `--gap-ms` 默认 **0**。旧笔记说"小矩形连发会把板子的 USB 打挂"，**已否定**：
 > 无调试器下 3000/6000 × 32×32 与 150/300 帧桌面负载都是 `errors=0`、`CFSR`/`HFSR` 保持 0，
 > 见 [todo.md](todo.md) 第 8 条。
-
 ## 固件侧配合的注意事项
 
 - 默认 `DECODER_TYPE=3`（QOI）。图片/视频脚本都按 QOI 发；换成 `2`（LZ4）才能用
   `img_viewer.py --codec lz4`，换成 `0`/`1`（tjpgd / JPEGDEC）才能收 JPEG —— 发错格式不会崩，
-  但屏幕上不动。**JPEG 只能整屏发（`x = y = 0`）**：JPEGDEC 在 `x != 0` 时会卡死显示，
-  见 [decoders.md](decoders.md)。仓库里没有发 JPEG 的脚本，测试直接用
-  `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。**LZ4 必须分带**（`band_pixels`），
-  整帧 block 解不了。
+  但屏幕上不动。**JPEG 只能整屏发（`x = y = 0`）**：JPEGDEC 在 `x != 0` 时会卡死显示，见
+  [decoder-architecture.md](decoder-architecture.md)。仓库里没有发 JPEG 的脚本，测试直接用
+  `Display.send_raw(jpeg_bytes, 0, 0, 479, 319)`。**LZ4 必须分带**（`band_pixels`），整帧 block 解不了。
 - `open_device()` 会顺带发一次 `PUD_CMD_GET_CAPS`，把设备的上限落到 `disp.frame_max` 与
-  `disp.band_pixels`，`send_rgb565()` 按它分带；设备不认这条命令（老固件）时保留本机默认
-  值（65535 B / 21835 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
-- 固件的 EP2 查询路径打了 UART 日志（`usb_hexdump` + `USB_LOG_WRN`），
-  实测每次查询约 **9.6 ms** —— 需要频繁查询时先去掉这些打印。
-- LZ4 已经重写：静态 band 缓冲、无 `printf`、每个传输一个 band（见
-  [decoders.md](decoders.md)）。要发 LZ4 就用 `--codec lz4` / `codec="lz4"`，
-  **不要试图整帧发**——设备会丢弃并让 `g_decoder_stat_lz4_oversize` 加一。
+  `disp.band_pixels`，`send_rgb565()` 按它分带；设备不认这条命令（老固件）时保留本机默认值
+  （65535 B / 21835 px），所以同一份脚本能同时伺候 RP2350（64 KB）与 RP2040（32 KB）。
+- 固件的 EP2 查询路径打了 UART 日志（`usb_hexdump` + `USB_LOG_WRN`），实测每次查询约
+  **9.6 ms** —— 需要频繁查询时先去掉这些打印。
+- LZ4 已经重写：静态 band 缓冲、无 `printf`、每个传输一个 band（见 [lz4.md](lz4.md)）。要发
+  LZ4 就用 `--codec lz4` / `codec="lz4"`，**不要试图整帧发** —— 设备会丢弃并让
+  `g_decoder_stat_lz4_oversize` 加一。
 
 ## 用 Xvfb 验证录屏脚本
 
-`xorg_desktop_share.py` 需要 X11；Wayland 会话下 `x11grab` 打不开显示，脚本会以
-非零码退出并说明原因。没有物理 X 时可用虚拟显示验证：
+`xorg_desktop_share.py` 需要 X11；Wayland 会话下 `x11grab` 打不开显示，脚本会以非零码退出并
+说明原因。没有物理 X 时可用虚拟显示验证：
 
 ```bash
 Xvfb :99 -screen 0 1280x720x24 &
@@ -232,157 +267,11 @@ DISPLAY=:99 xclock -update 1 -geometry 260x260+900+60 &
 python3 tools/xorg_desktop_share.py --display :99 --fps 15 --stats
 ```
 
-验证结果：只发出时钟区域变化的小块（如 `41x56 @ (359,54)`、`69x38 @ (358,75)`），
-而不是整屏，说明脏区检测按预期工作。
+验证结果：只发出时钟区域变化的小块（如 `41x56 @ (359,54)`、`69x38 @ (358,75)`），而不是整屏，
+说明脏区检测按预期工作。
 
----
+## 相关
 
-# C 工具 `tools/pudcodec`
-
-上面这些是**发给设备**的脚本；`tools/pudcodec` 是**离线的资产转换器**：把图片/帧序列
-压成设备能解的码流，或者反过来把码流还原成图片。它把上游 `rgb565-rle` / `rgb565-qoi`
-仓库里那六个体积相近的小工具（`img2rle`、`video2rle`、`rle2img` 和各自的 qoi 版）
-合成一个：**编解码类型在运行时用 `--codec` 指定**。
-
-```bash
-cmake -S tools -B tools/build && cmake --build tools/build -j     # 主机侧构建，与固件无关
-```
-
-`stb_image.h` / `stb_image_write.h` 已 vendor 在 `tools/` 里，**配置时不需要联网**
-（上游是配置时下载的）。构建产物在 `tools/build/`（已 gitignore），不进固件镜像。
-
-## 用法
-
-```bash
-pudcodec --codec <qoi|rle|lz4|jpeg> img2s   [options] <image>     # 图片 -> 码流
-pudcodec --codec <qoi|rle|lz4|jpeg> s2img   [options] <stream>    # 码流 -> 图片
-pudcodec --codec <qoi|rle|lz4|jpeg> video2s [options] <frames...> # 帧序列 -> 容器
-```
-
-| 选项 | 说明 |
-| --- | --- |
-| `--codec` | `qoi` / `rle` / `lz4` / `jpeg`；`auto` 表示从 `.h` 里的 `_CODEC` 标签取 |
-| `-o` | 输出路径（默认 `<输入>.<codec>.h/.bin`，`s2img` 默认 `<输入>.png`） |
-| `-t` | `img2s`/`video2s`：`h`（C 头，默认）或 `bin`；`s2img`：`png`/`jpg`/`bmp`/`tga` |
-| `-n` | C 数组名 / 基名（默认从输出文件名推，取到第一个 `.` 为止） |
-| `-w` `-h` | `img2s`/`video2s` 是缩放目标；`s2img` 读 `.bin` 时**必须给**（码流里没有尺寸，JPEG 除外） |
-| `-q` | JPEG 质量，默认 95 |
-| `--band` | LZ4 only：每个 block 的行数（默认取"装得下且能整除高度"的最大值） |
-| `--raw` | `video2s` 的输入是拼接好的裸 RGB565 帧 |
-
-编解码对应关系：`jpeg` 覆盖设备侧的 `DECODER_TYPE` 0 和 1（两种 JPEG 解码器吃同一份
-码流），`lz4` 是 2、`qoi` 是 3、`rle` 是 4。工具会把 `decoder_type` 打在摘要里，
-省得回头翻文档。
-
-**LZ4 输出的是 band 容器**（`[count][offsets][blocks]`，每 band 一个 block），不是单个
-整帧 block：LZ4 block 不能分块解码，设备一次只持有一个 band（见
-[decoders.md](decoders.md) 与 `AGENTS.md` 第 9 条）。`--band` 不指定时取"装得下设备
-band 缓冲（43678 B）且能整除图像高度"的最大行数，这样 band 高度能从
-`block 数 / 图像高度` 推回来，`s2img` 与固件的开机 logo 才能重建。
-`video2s --codec lz4` 对每一帧都这样分带，容器是**扁平的**（帧优先，一帧内自上而下）。
-
-开机 logo 的四个分支（jpeg / lz4 / qoi / rle）都由 `tools/mkbootlogo.py` 从同一个资产
-重新生成：
-
-```bash
-cmake -S tools -B tools/build && cmake --build tools/build   # 先有工具
-python3 tools/mkbootlogo.py            # 重写 include/bootlogo.h
-python3 tools/mkbootlogo.py --check    # 只比对，不改文件
-```
-
-资产必须是**无损**的（现在是 `assets/bootlogo.png`）：`check_pudcodec.py` 第 7 项会拿
-Pillow 解出的像素重压一遍再和分支逐字节比，JPEG 源会因两套解码器的 IDCT 舍入不同而失败。
-脚本只重写每个分支的字节行（标记、注释、声明都不动），**落盘前先反解回来与工具的产物逐字节
-比对** —— 这个文件曾被一次批量替换清空过（AGENTS.md 第 8 条）。
-
-## 与固件/脚本的一致性（2026-09 实测）
-
-`tests/check_pudcodec.py` 把这条路径与 `pud_usb.py` 对拍，**不需要设备**：
-
-```bash
-python3 tests/check_pudcodec.py     # 全部通过才返回 0
-```
-
-| 检查 | 结果 |
-| --- | --- |
-| `img2s --codec qoi/rle` vs `pud_usb.qoi_encode/rle_encode`（PNG 源） | **逐字节相同**（photo/noise/gradient 三份，最大 444298 B） |
-| `video2s --raw` 的容器：`[count][offsets[count+1]][data]`、帧数据 | 结构正确，第 0 帧与 Python 编码器逐字节相同 |
-| `s2img` 往返 | QOI/RLE/LZ4 都是 153600/153600 像素完全相同 |
-| `.h` 的 `_CODEC` / `_WIDTH` / `_HEIGHT` / `_SIZE` / 帧表 | 正确；`--codec auto` 能据此自动解码 |
-| JPEG 往返 | 最大 10 LSB、平均 0.20 LSB（有损，属正常） |
-| `img2s --codec lz4` 的 band 容器 | 结构正确、每 band 都装得下 43678 B、`s2img` 往返像素精确 |
-| **`include/bootlogo.h` 的 QOI / RLE / LZ4 分支** | 用同一张图重压，**逐字节相同**（29652 / 49485 / 17585 B） |
-
-两条**已知的不一致**（都是用压缩工具时要知道的）：
-
-- **JPEG 源图两条路径不逐字节相同**：`stb_image` 与 Pillow/libjpeg 解 JPEG 的取证
-  （IDCT 舍入）不同，同一张图一个出 49485 B、一个出 49494 B（数字出自换 PNG 之前那张
-  `bootlogo.jpg`）。要比字节就用无损源（PNG）或 `--raw` 喂同一份 RGB565；差异 ≤1 LSB，
-  屏上看不出来。开机图现在是 PNG，正是为了避开这条。
-- **LZ4 码流不跨版本逐字节一致**：工具 vendor 的 liblz4 是 1.10.0，板子上 python-lz4
-  4.4.5 带的是 1.9.x，同一条 band **8 条里有 3 条**压缩结果不同（都合法）。设备只解压，
-  `LZ4_decompress_safe` 与版本无关；两条来源的码流**都在板上验证过像素精确**
-  （工具生成的 bootlogo 资产、`pud_usb.lz4_encode` 发的帧）。要比字节就固定同一个
-  liblz4 版本。**因此 `check_pudcodec.py` 的 `python encoder agrees, band for band`
-  一项在 1.9.x 的 wheel 上必然 FAIL**（2026-09-26 实测：8 条里 5 条字节相同、3 条不同，
-  但**8 条解出来都与原像素精确一致**）—— 这一项比上面的结论更严，别当成回归。
-
-> RGB565 的打包用**截断**（`r >> 3`）而不是四舍五入，跟 `pud_usb.py` 保持一致 ——
-> 这是两条主机路径能逐字节对拍的前提。
-
-### 开发机上的一次完整验证（2026-09-26，x86_64 原生 Linux）
-
-环境：Ubuntu 24.04、Python 3.12 + 仓库内 `.venv`（pyusb 1.3.1 / Pillow 12.3.0 /
-numpy 2.5.3 / lz4 4.4.5）、`60-pico-usb-display.rules` 已装（设备节点 0666）、
-设备 `2e8a:0001`（固件 SN `0xb88c42…`）。全部命令都在仓库根目录下跑。
-
-| 命令 | 结果 |
-| --- | --- |
-| `python3 tools/pud_usb.py` | 自检通过；QOI/RLE 与 C 库参考向量一致，band limit 报 **21835**；没有 numpy 时自动走纯 Python 打包路径 |
-| `python3 tests/check_pudcodec.py` | 28 项断言 **27 通过**，唯一 FAIL 是上面那条已知的 LZ4 版本差异 |
-| `pud_usb.open_device()`（读 caps） | `proto 2 / frame_max 65536 / decoder 3 / band_pixels 21835`；面板 `480x320 rotation 1 16bpp 50000kHz touch poll 10ms 70x40mm touch True` —— 与固件/驱动文档**逐字段一致** |
-| `img_viewer.py --xres 480 --yres 320 assets/bootlogo.jpg`（当时那张） | `sent 8 bands, 29814 B in 52.6 ms`（8 带 = `ceil(320/45)`） |
-| 同上，换成现在的开机图 `assets/bootlogo.png` | `sent 8 bands, 13074 B in 26.8 ms` —— **载荷与时间仍只有原来的一半** |
-| `ep1_out_speed_test.py` | 8~320 行的每个尺寸都是 **~0.816 MB/s** 一条平线（**经 hub**；直插根口是 1.13 MB/s，见下） |
-| `fps_bench.py --full --frames 20` | photo **6.19 fps**、noise **1.83 fps**，判定都是 `USB 受限` |
-| `video_player.py --xres 480 --yres 320 --fps 15 --no-loop test.mp4` | `75 frames in 5.1 s -> 14.6 fps, 0.37 MB/s`（目标 15 fps，基本实时；片源是 `ffmpeg -f lavfi -i testsrc=size=480x320:rate=15 -t 5 …` 造的） |
-| `desktop_codecs.py --device --codec qoi --frames 20` | 全屏 93893 B → **117.63 ms**；八个区域的带宽都是 **~0.80 MB/s**（经 hub；根口 86.00 ms） |
-| `codec_compare.py --codec qoi --frames 20` | solid 265.4 fps / gradient 24.2 / photo 6.1 / noise 1.8 —— 与 `fps_bench` 的同一批数字**一致** |
-| `xorg_desktop_share.py --frames 30 --stats` | `30 frames in 5.7 s -> 5.2 fps, 0.06 MB/s`；日志里**只发脏矩形**（`last 6x6 at 223,14`、`239x274 at 0,23` …） |
-| `touch_draw.py --seconds 5`（无人触摸） | 画布推上去 `2610 B / 13.5 ms`，0 报告、`rc=0` —— **空闲场景处理正确**（与 `touch_test.py` 相反） |
-| `touch_test.py --mode poll` | **`version = 1`** —— 固件确实上报触摸 |
-| `touch_test.py`（push，**有人触摸**） | x `159..342` / y `162..225`、报告间隔中位 **8.0 ms**（≈125 Hz）、**exit 0** —— 与 [usb-protocol.md](usb-protocol.md) 的实测一致 |
-| `touch_test.py`（push，**面板空闲**） | 0 报告 → 打印 "this firmware does not report touch (EP4 is still a stub)" 并 **exit 1** |
-
-两个要注意的（都不是设备的问题）：
-
-- **`touch_test.py` 的 push 模式在"面板空闲"时会误报**：没人碰时收不到报告，脚本据此断定
-  "固件不支持触摸"（`tests/touch_test.py` 结尾那段），而本机 `caps['touch']` 是 True、
-  poll 模式拿到了 `version = 1`、真去摸面板也能立刻收到 8.0 ms 间隔的报告并正常退出。
-  判据应该用 caps 的 `touch` 位（或先 poll 一次）来区分"没人碰"和"没实现"；现在空闲场景下
-  的文案和 exit 1 是**假阴性**。另外 `--mode poll` 每条报告后固定 200 ms 的间隔是脚本自己的
-  `sleep(idle_timeout)`，不是设备节奏。
-- **吞吐 0.816 MB/s 比在 RK3588 开发机上量到的 1.13 MB/s 低约 28%** —— 这是**拓扑差异**
-  （Pico 经 480M hub 的 TT），不是设备性能。2026-09-30 做了直连 vs 经 hub 的 A/B，
-  **已证实**，见下一节。
-
-### 全速设备别挂在 hub 后面（2026-09-30 A/B 实测）
-
-同一台 x86 开发机、同一块板子、同一份固件（`DECODER_TYPE=3`，225 MHz），只换插口：
-
-| 插法（sysfs 路径） | `ep1_out_speed_test.py` 11 KB / 88 KB / 444 KB | 桌面整屏 93893 B（`desktop_codecs.py --device`） |
-| --- | --- | --- |
-| 经 480M hub（`3-2.2`，Realtek `0bda:5420`，走 TT） | 0.817 / 0.833 / 0.833 MB/s | 117.63 ms（2026-09-26 那轮） |
-| **直插 xHCI 根口**（`3-6`） | **1.110 / 1.130 / 1.132 MB/s** | **86.00 ms**（1.09 MB/s） |
-
-- **+36% 吞吐（0.833 → 1.132 MB/s），全部来自拓扑**；根口的数字 = RK3588 直连 = 全速理论
-  上限 1.216 MB/s 的 93%。两种插法下设备侧都干净（`submitted == drawn`、`dropped`/`bad`/
-  `oversize`/`stale` = 0、`CFSR`/`HFSR` = 0），所以损失在 hub 的 TT 调度里，不在设备。
-- **量吞吐前先看拓扑**：`/sys/bus/usb/devices/<路径>/speed` 是 `12`（设备本身全速），关键是
-  路径里有没有 `.`（`3-2.2` = 经 hub、`3-6` = 根口），或 `lsusb -t` 里它上面是不是一个
-  `Class=Hub`。拿经 hub 的数字和别人直连的比，会把 28% 的拓扑差当成设备问题。
-- 根口下各区域（20 帧中位，编码在计时外）：面板条 2122 B 2.06 ms、文本行 2010 B 1.96 ms、
-  终端窗体 18124 B 17.00 ms、壁纸条 19252 B 17.64 ms、整屏 86.00 ms —— 带宽 1.03~1.11 MB/s，
-  仍然**贴着链路**，要再快只能少发字节。
-- `img_viewer.py` 打印的 MB/s（根口下 0.64~0.81）**不是链路速度**：它的计时里含 Python 侧的
-  图片加载与 QOI 编码。
+- 脚本的实测带宽、触摸数据、完整验证记录：[scripts-measurements.md](scripts-measurements.md)
+- 离线转换器 `pudcodec` 与一致性对拍：[pudcodec.md](pudcodec.md)
+- FPS 基准确认方法：[fps-bench.md](fps-bench.md)

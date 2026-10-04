@@ -1,0 +1,197 @@
+# 踩坑：内存与堆
+
+> RP2350 主 SRAM 只有 512 KB，`ep1_read_buffer` + 帧槽就吃掉大半；`configTOTAL_HEAP_SIZE`
+> 在本项目**不起作用**（链接的是 `heap_3.c`）。
+
+## TL;DR
+
+- 大块静态缓冲是内存大头（EP1 缓冲 + 帧槽），它们的尺寸由 `PUD_MAX_TRANSFER` 按板子决定，**不要翻倍**（RP2040 实测 109% RAM 链接失败）。
+- `configTOTAL_HEAP_SIZE` 无效：`heap_3.c` 只是包装 `malloc`，堆的上限是链接脚本的 `__HeapLimit`，越界返回 NULL 而不是踩栈。
+- 保持 `heap_3`；缺的是**可见性**，不是上限。**已补**（2026-10）：`configUSE_MALLOC_FAILED_HOOK=1`
+  + `vApplicationMallocFailedHook()`，另加 `configCHECK_FOR_STACK_OVERFLOW=2`
+  + `vApplicationStackOverflowHook()`，`main.c` 的 `usb_task` 启动时用 `mallinfo()` 打印真实堆余量。
+  **实测代价只有 RAM +8 B**（FLASH +8.3 KB）；**换 heap_4 会静态预留 16 KB**，而内核只需约 10.3 KB。
+- 任务栈深度的单位是 **word**，创建时一次性固定分配；`0xa5` 填充只是调试水位尺，不参与分配。
+
+## 3.1 静态 RAM 占用
+
+### 当前构型
+
+大块由两个宏决定，都按板子分（见 [../AGENTS.md](../AGENTS.md) 不变量 3）：
+
+| 符号 / 段 | 尺寸 | 说明 |
+| --- | --- | --- |
+| `ep1_read_buffer` | `EP1_RD_BUF_SIZE = PUD_MAX_TRANSFER` | RP2350 64 KB / RP2040 32 KB，在 `.noncacheable` |
+| `s_frames` | `DECODER_FRAME_SLOTS(3) × DECODER_FRAME_MAX(= PUD_MAX_TRANSFER)` + 每槽头 | RP2350 3 × 64 KB，在 `.bss` |
+| `lz4_band` | 21837 px × 2 B = 43674 B | LZ4 构型 |
+| `qoi_band` | `QOI_NONCALLBACK=2` 时 2 × 43674 = 87348 B | QOI/RLE 默认构型 |
+| `qoi_buf_a/b` | 各 15360 B | 回调回落路径 / `PUD_DECODER_PINGPONG` |
+
+实测规模（来自各轮构建记录）：RP2350 上 **3 槽时 `.data+.bss` ≈ 440 KB、4 槽 504 KB**
+（4 槽能链接但运行时没有栈）；RP2040 上 3 帧槽的 qoiz 构型 **164 KB / 264 KB**、
+qoid 构型 **203 KB / 258 KB**（数据来自 [qoiz.md](qoiz.md) / [qoid.md](qoid.md) 的构建记录）。
+
+### 旧构型的历史实测（EP1 128 KB + 2 × 64 KB 槽）
+
+用 `arm-none-eabi-size` / `nm --size-sort` 实测，**当时的** QOI 固件：
+
+| 符号 / 段 | 大小 | 说明 |
+| --- | --- | --- |
+| `ep1_read_buffer` | **131072 B**（128 KiB） | `EP1_RD_BUF_SIZE`，在 `.noncacheable` |
+| `s_frames` | **131104 B**（128 KiB） | `DECODER_FRAME_SLOTS(2) × DECODER_FRAME_MAX(65536)` + 32 B 头，在 `.bss` |
+| `qoi_buf_a` + `qoi_buf_b` | 15360 B（15 KiB） | `480 × QOI_BUF_ROWS(8) × 2 B` × 2，在 `.bss` |
+| `.data` | 3648 B | 已初始化变量 |
+| `.noncacheable` | 132348 B | USB 缓冲单独放在不 cache 的区 |
+| `.bss` | 149804 B | 其余静态变量 |
+| **data + bss 合计** | **284472 B（≈278 KiB）** | 约占 512 KB 主 SRAM 的 54% |
+
+`size` 输出（当时）：
+
+```
+   text    data     bss     dec     hex  filename
+  92324  132348  152124  376796  5bfdc  pico-usb-display.elf
+```
+
+链接脚本可用的主 SRAM 区间是 `0x20000000`–`0x20080000`（512 KB）；当时 `.bss` 顶端（`end`）
+在 `0x20045d7c`。
+
+**结论**：EP1 缓冲 + 帧槽是大头。所以**不要轻易把 `DECODER_FRAME_MAX` 或
+`DECODER_FRAME_SLOTS` 翻倍** —— 2 × 128 KB 会溢出（曾评估约 540 KB > 512 KB）。RP2040 上
+128 KB + 2 × 64 KB 实测到 RAM 的 **109%**，直接链接失败。若确实需要更大的单帧，正确方向是：
+保留流控（丢帧问题已由背压解决），或把帧槽改成"指针 + 两级缓冲"以复用 EP1 的缓冲。
+
+## 3.2 `configTOTAL_HEAP_SIZE` 在本项目里**不起作用**（重要）
+
+`FreeRTOSConfig.h` 定义了 `configTOTAL_HEAP_SIZE (128*1024)`、`configAPPLICATION_ALLOCATED_HEAP 0`，
+看起来像"128 KB 固定堆"，但**实际链接的是 `heap_3.c`**，它的实现直接包装编译器的
+`malloc`/`free`：
+
+```c
+/* heap_3.c */
+pvReturn = malloc( xWantedSize );
+```
+
+`heap_3.c` **完全不使用 `configTOTAL_HEAP_SIZE`**（也不存在 `ucHeap` 这个符号）。所以：
+
+- 任务栈、TCB、队列等都由 **newlib `malloc`** 提供；
+- 堆通过 `sbrk` 从 `.bss` 末尾向上增长，上限是链接脚本的 `__HeapLimit = 0x20080000`；
+  **这个上限是真会被检查的**：`_sbrk` 反汇编里就是 `cmp r3, #0x20080000` /
+  `movhi.w r0, #0xffffffff`，越界返回 -1 → `malloc` 返回 NULL，**不会长进中断栈**；
+- 当时可用堆 = `0x20080000 - __bss_end__(0x20045de0)` ≈ **238 KB**；
+- 改 `configTOTAL_HEAP_SIZE` **不会有任何效果** —— 要限制堆得改链接脚本或换 `heap_4.c`。
+
+> **常见误解：`heap_3` ≠ "任务栈按实际使用量分配"。**
+> `xTaskCreate()` 的栈深度参数（单位是 **word**，不是 KB：256 → 1 KB）就是
+> `pvPortMallocStack( 深度 × sizeof(StackType_t) )` 的实参，**创建时一次性固定分配**，
+> 只有 `vTaskDelete()` 才归还。另外还会单独 `pvPortMalloc( sizeof(TCB_t) )` 一笔（128 B）。
+> 那层 `0xa5` 填充（`tskSET_NEW_STACKS_TO_KNOWN_VALUE`，由 `configUSE_TRACE_FACILITY` /
+> `INCLUDE_uxTaskGetStackHighWaterMark` 触发）只是**调试用的水位尺**，不参与分配，
+> 也不会让栈"长大"。
+>
+> 反例就在实测数据里：`decoder_task` 收缩前声明 4096 words（16 KB），峰值只用了 496 B ——
+> 若真按用量分配，它只该占 ~0.5 KB。所以每个任务的实际开销恒为
+> `sizeof(TCB_t)`(128 B) + 深度 × 4 + malloc 块头(~8 B)，`indev_read` ≈ 1.2 KB；
+> 收缩后 `decoder_task`（1024 words）≈ 4.1 KB。
+>
+> 顺带：`heap_3` 只实现 `pvPortMalloc`/`vPortFree`/`vPortHeapResetState`，**没有**
+> `xPortGetFreeHeapSize()` / `xPortGetMinimumEverFreeHeapSize()`，看不到 FreeRTOS 侧的堆统计；
+> 代价是每次 malloc/free 都要 `vTaskSuspendAll()`。`configMINIMAL_STACK_SIZE`(256) 只作用于
+> 两个 idle 任务，跟显式传的 256 无关。
+
+想确认实际用的是哪个 heap，看链接了哪个文件即可：
+
+```bash
+grep -oE "[^ ]*heap_[0-9]\.c" build-pico2/build.ninja | sort -u
+```
+
+栈深度参数（`xTaskCreate`）以 **word** 为单位，RP2350 上 1 word = 4 B：
+
+| 任务 | 栈参数 | 实际字节 | 实测峰值 |
+| --- | --- | --- | --- |
+| `usb_task` | 256 | 1 KB | 416 B |
+| `indev_read` | 256 | 1 KB | 432 B |
+| `decoder_task` | **1024** | **4 KB** | 496 B（QOI）/ 632 B（JPEGDEC）/ 600 B（tjpgd） |
+| `Tmr Svc` | 256 | 1 KB | 152 B |
+| `IDLE0`/`IDLE1` | 256×2 | 1 KB×2 | 128 / 112 B |
+
+合计约 **9 KB**（收缩前 24 KB）。`Tmr Svc` 的深度由 `configTIMER_TASK_STACK_DEPTH` 控制
+（`include/FreeRTOSConfig.h`）；**本工程没有创建任何软件定时器**，所以它只是空转，
+256 words 足够（真要用定时器回调前先加大）。测量方法见 [debugging.md](debugging.md)。
+
+`xTaskCreate` 失败时返回 `errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY`（它**不**panic），而且是
+**两次** `malloc`（栈 + TCB），所以 `vApplicationMallocFailedHook` 未必会触发 —— 堆被耗尽时
+会静默少一个任务。`main()` 里的 `usb_task` 与 `indev_read` 已改为经
+`check_task_created()` 检查并打印致命信息（2026-10）；**`decoder_task` 的创建在 `decoder.c`
+里，仍未检查**。加任务/加大栈前先算总量。
+
+## 3.3 该选 heap_几？—— 保持 `heap_3`
+
+| 实现 | 适合本项目吗 |
+| --- | --- |
+| `heap_1` | ✗ 不能 `free`，`vTaskDelete` 直接不可用 |
+| `heap_2` | ✗ 能 `free` 但不合并空闲块，容易碎片（已废弃） |
+| **`heap_3`（当前）** | ✓ 见下 |
+| `heap_4` | △ 有统计、带合并，但要把 SRAM 静态切一块，切多少得自己猜 |
+| `heap_5` | ✗ 多段不连续内存才需要；RP2350 主 SRAM 是连续的 |
+
+保住 `heap_3` 的理由：
+
+1. **它不是"无上限"**：`_sbrk` 硬性卡在 `__HeapLimit = 0x20080000`（正好是中断栈底），
+   越界是 `NULL` 而不是踩栈（已用反汇编验证）。
+2. **换 `heap_4` 不会凭空多出内存**，只是把同一块 SRAM 在"FreeRTOS 堆"和"newlib C 堆"
+   之间**切开**：`ucHeap` 进 `.bss` 会把 `__bss_end__` 顶高，C 堆（stdio 等仍走它）相应变小。
+   总额不变，却多了一个要猜的分割点。
+3. 本项目堆负载很轻且集中在启动期：6 个任务的 TCB + 栈 ≈ 23 KB，其余是 newlib stdio。
+   没有高频分配路径 —— 唯一的例外曾是 LZ4 每帧 `malloc(LZ4_compressBound(480*320*2))` ≈
+   **308 KB**，而**这个在任何 heap 下都跑不起来**（可用 SRAM 只剩 238 KB），只能改代码
+   （静态 workspace 或分带解压，已随 LZ4 重写解决）。heap 选择帮不上它。
+4. 代价只有两条：没有 `xPortGetFreeHeapSize()` 统计；每次 malloc/free 包一层
+   `vTaskSuspendAll()`（在这个分配频率下可忽略）。
+
+**真正该补的不是换 heap，而是失败可见性**（见 [todo.md](todo.md)）：`configUSE_MALLOC_FAILED_HOOK 0`
+且没有 `vApplicationMallocFailedHook()`；`xTaskCreate` 返回值没检查。`heap_3` 的 `pvPortMalloc`
+里本来就有调用 hook 的分支，打开配置 + 实现钩子即可（打印并停下，而不是静默少一个任务）。
+
+## 3.4 兼容 RP2040：瓶颈是那两块大缓冲，不是栈（已实测）
+
+**先给结论**：RP2040 分支**能编译、能链接**，不需要额外的移植工作 —— 缺的只是内存。
+把 `PUD_MAX_TRANSFER` 按板子分开之后，`PICO_BOARD=pico` 与 `pico2` 都能构建通过：
+
+| 构建 | .data/.bss | 占可用 SRAM | 说明 |
+| --- | --- | --- | --- |
+| `pico2`（改前） | 287976 B | 55% of 512 KB | `EP1_RD_BUF_SIZE` 还是 128 KB |
+| **`pico2`（当时）** | **222696 B** | 42% | EP1 缓冲 128 → 64 KB |
+| `pico`（改前） | 287976 B | **109.85% of 256 KB** | **链接直接失败** |
+| **`pico`（当时）** | **124136 B** | **47%** | 每帧 32 KB 上限 |
+
+RP2040 侧当时剩余堆 ≈ `0x20040000 - __bss_end__(0x2001dce8)` ≈ **136 KB**，任务栈 9 KB
++ CherryUSB + stdio 之后仍然宽裕。片上 ISR 栈走 SCRATCH_X/Y（`__StackTop` = 0x20042000），
+不占这 256 KB。
+
+**改了哪两处**（都在 `src/cherryusb/usbd_vendor.h` 的 `PUD_MAX_TRANSFER`）：
+
+| 板子 | `PUD_MAX_TRANSFER` | `ep1_read_buffer` | `s_frames`（当时 2 槽） | 每屏段数 |
+| --- | --- | --- | --- | --- |
+| RP2350 | 64 KB | 64 KB | 2 × 64 KB | 8（与改前**完全相同**） |
+| RP2040 | 32 KB | 32 KB | 2 × 32 KB | ~15（480 宽 → 22 行/段） |
+
+- 主机不再写死分带大小：驱动与 `tools/pud_usb.py` 都用 `PUD_CMD_GET_CAPS` 问设备。
+  RP2350 上设备报 65536，经 `min(65535, …)` 得到 **21835** px（`(65535 - 12 - 16) / 3`）——
+  与旧版编译期常量一致，所以 RP2350 上分带行为零变化（v1 日志里的 **21839** 是 12 B EP1
+  header 还没占单次传输预算时的数，别混用）。
+- 32 KB 是"够用且留足堆"的折中，不是硬性上限：`PUD_MAX_TRANSFER` 在 `usbd_vendor.h`
+  一处定义，想给 RP2040 更大的段改一个数字即可。
+- **代价在性能上，且只落在 RP2040**：分带变小 = 往返变多。实测 RP2350 上全刷纯色 8 段的
+  `min`（纯 USB 下限）已经 5.7 ms ≈ **0.7 ms/段**，15 段就要 ~10 ms 的下限；再加上 M0+ 比
+  M33 慢（QOI 全刷解码 RP2350 约 5 ms，RP2040 **未实测**），RP2040 上全刷大概率变成
+  "设备侧受限"。局部刷新本来就是 USB 受限，与段数无关。
+
+> 教训：以为"要兼容小内存板子"就先动栈，其实栈只占 9 KB；真正的开销是 `ep1_read_buffer`
+> 与 `s_frames` 这两块，而它们的尺寸是**协议的**一部分，必须让设备告诉主机，而不是两边各写
+> 一个常量。
+
+## 相关
+
+- 帧槽设计与不变量：[frame-pipeline.md](frame-pipeline.md)
+- 任务栈水位测量方法：[debugging.md](debugging.md)
+- 构建配置与板型：[build-and-flash.md](build-and-flash.md)

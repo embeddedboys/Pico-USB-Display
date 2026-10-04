@@ -45,8 +45,15 @@
  * blocks only).  Experimental; see notes/decoders.md. */
 #define DECODER_USE_QOID 6
 
+/*
+ * CMake always defines this (DECODER_TYPE in CMakeLists.txt, default 3 = QOI),
+ * so the fallback only applies to a build that bypassed it -- in which case it
+ * has to agree with that default.  It used to say JPEGDEC, which would have
+ * built a firmware the driver does not speak, silently, from the same source
+ * tree the CMake build produces a working image from.
+ */
 #ifndef DECODER_TYPE
-#define DECODER_TYPE DECODER_USE_JPEGDEC
+#define DECODER_TYPE DECODER_USE_QOI
 #endif
 
 typedef unsigned char u8;
@@ -85,38 +92,21 @@ extern void decoder_submit_frame(u16 xs, u16 ys, u16 xe, u16 ye, const u8 *data,
                                  u32 size);
 extern bool decoder_slot_free(void);
 
-#if DECODER_TYPE == DECODER_USE_TJPGD
-#define decoder_drawimg(xs, ys, xe, ye, b, l) \
-	tjpgd_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_JPEGDEC
-#define decoder_drawimg(xs, ys, xe, ye, b, l) \
-	jpegdec_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_LZ4
-#define decoder_drawimg(xs, ys, xe, ye, b, l) lz4_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_QOI
-#define decoder_drawimg(xs, ys, xe, ye, b, l) qoi_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_RLE
-#define decoder_drawimg(xs, ys, xe, ye, b, l) rle_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_QOIZ
-#define decoder_drawimg(xs, ys, xe, ye, b, l) qoiz_drawimg(xs, ys, xe, ye, b, l)
-#elif DECODER_TYPE == DECODER_USE_QOID
-#define decoder_drawimg(xs, ys, xe, ye, b, l) \
-	qoid_drawimg(xs, ys, xe, ye, b, l, 0, 0)
-#else
-#error "Invalid decoder type selected"
-#endif /* DECODER_TYPE */
-
 /*
- * The frame task knows which slot a band came out of; only DECODER_TYPE 6 cares
- * (it keeps its dictionary per slot).  Every other decoder ignores the extra
- * argument, so this stays a macro rather than a function.
+ * Decode one band with whichever codec this firmware was built for.
+ *
+ * The body is in decoder.c -- one #if per codec, in one place -- so
+ * "what runs for DECODER_TYPE n" is a question about a function rather than
+ * about a seven-branch macro redefinition.  DECODER_TYPE is a compile-time
+ * constant, so the compiler folds the selection away and the call costs
+ * nothing, which is what the macro chain was buying.
+ *
+ * `slot` and `serial` describe where the band came from (see
+ * decoder_submit_frame).  Only DECODER_TYPE 6 reads them: it keeps a dictionary
+ * window per slot.  A caller that has no slot -- the boot logo, drawn before
+ * any host band arrives -- passes 0, which can only ever be a keyframe.
  */
-#if DECODER_TYPE == DECODER_USE_QOID
-#define decoder_drawimg_slot(xs, ys, xe, ye, b, l, slot, serial) \
-	qoid_drawimg(xs, ys, xe, ye, b, l, slot, serial)
-#else
-#define decoder_drawimg_slot(xs, ys, xe, ye, b, l, slot, serial) \
-	decoder_drawimg(xs, ys, xe, ye, b, l)
-#endif
+extern void decoder_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *data, u32 size,
+                            int slot, u32 serial);
 
-#endif /* __UDD_DECODER_H */
+#endif /* __DECODER_H */

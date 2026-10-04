@@ -103,11 +103,19 @@ struct bits {
 	uint32_t acc;
 	unsigned n;
 	int eof;
+	/* A consume past the end of the input.  Without it the accumulator's
+	 * stale bits look like a valid code stream and a *truncated* stream
+	 * decodes to rubbish with a success return -- measured: all 1405
+	 * prefixes of a valid stream were accepted, the first ones producing a
+	 * byte or two of nothing.  n is unsigned, so the underflow used to wrap
+	 * to a huge value and the "eof && n == 0" test never fired. */
+	int overrun;
 };
 
 static void br_init(struct bits *b, const uint8_t *p, size_t len)
 {
 	b->p = p; b->len = len; b->pos = 0; b->acc = 0; b->n = 0; b->eof = 0;
+	b->overrun = 0;
 }
 
 static void br_fill(struct bits *b)
@@ -130,6 +138,12 @@ static unsigned br_peek(struct bits *b, unsigned n)
 
 static void br_drop(struct bits *b, unsigned n)
 {
+	if (n > b->n) {
+		b->overrun = 1;
+		b->n = 0;
+		b->acc = 0;
+		return;
+	}
 	b->acc >>= n;
 	b->n -= n;
 }
@@ -166,7 +180,7 @@ int tinyd_inflate(const uint8_t *in, size_t in_len,
 	while (!final) {
 		unsigned btype;
 
-		if (b.eof && b.n == 0)
+		if (b.overrun || (b.eof && b.n == 0))
 			return TINYD_ERR_TRUNCATED;
 		final = (int)br_peek(&b, 1);
 		br_drop(&b, 1);
@@ -205,6 +219,11 @@ int tinyd_inflate(const uint8_t *in, size_t in_len,
 		for (;;) {				/* fixed Huffman block */
 			unsigned sym, len, dist, extra;
 
+			/* A code longer than the bits that are left is caught by
+			 * the drop inside decode_sym; a code that fits is real,
+			 * because the table only offers prefix-free codes. */
+			if (b.overrun)
+				return TINYD_ERR_TRUNCATED;
 			if (decode_sym(&b, lit_sym, lit_bits, 288, &sym))
 				return TINYD_ERR_FORMAT;
 			if (sym < 256) {
@@ -247,6 +266,16 @@ int tinyd_inflate(const uint8_t *in, size_t in_len,
 			}
 		}
 	}
+	/* The last block can end on a code that ran past the input: with the
+	 * accumulator empty, index 0 of the fixed literal table *is* the
+	 * end-of-block code, so the inner loop breaks out of a block whose bits
+	 * were never there, and "final" reads as 1 from nothing.  That is the
+	 * one path that reaches here with overrun set -- 327 of 1405 truncated
+	 * prefixes of a valid stream took it, all with output identical to what
+	 * zlib decodes from the same prefix. */
+	if (b.overrun)
+		return TINYD_ERR_TRUNCATED;
+
 	if (out_len)
 		*out_len = pos - dict_len;
 	return TINYD_OK;

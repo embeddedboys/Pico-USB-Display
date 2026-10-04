@@ -1,29 +1,51 @@
 # 调试
 
+> 调试器（OpenOCD + gdb）是定位工具：读计数器、抓 HardFault、量任务栈；但**只读检查完必须
+> `monitor resume`**，别用 `monitor reset run` 清掉现场。
+
+## TL;DR
+
+- OpenOCD 可跑在 Windows 宿主（WSL 看不到调试器和 USB），也可直接跑在原生 Linux 开发机；gdb 侧命令相同。
+- `HFSR`/`CFSR`/`BFAR` 是**粘滞**的：复位后跑一段负载再读，就能判断这段负载有没有触发故障（不需要一直挂调试器）。
+- `CFSR` 的 `STKERR`/`MSTKERR` ≈ "某处栈不够"；任务栈有 PSPLIM（越界 fault），**中断栈没有**。
+- 任务栈建栈时填 `0xa5`，从 `pxStack` 往上的连续 `0xa5` 就是没用过的部分，峰值 = 栈深 − 该长度，全程只读内存。
+
 ## 调试器链路
 
 ```
-Pico (RP2350)  ──CMSIS-DAP──►  Windows 宿主机 (OpenOCD :3333 / telnet :4444)
-                                        │
-                                   WSL / 开发机 (gdb-multiarch)
+Pico (RP2350)  ──CMSIS-DAP──►  宿主机 (OpenOCD :3333 / telnet :4444)
+                                       │
+                                  WSL / 开发机 (gdb-multiarch)
 ```
 
-**OpenOCD 必须跑在能看到 USB 设备的宿主机上**。WSL 里既没有 `/dev/bus/usb`，
-也没有权限 `mknod` 造出来，所以调试器只能从 Windows 侧访问，WSL 通过 `localhost:3333` 连。
-
-启动 OpenOCD（Windows）：
+**OpenOCD 必须跑在能看到 USB 设备的宿主机上**。WSL 里既没有 `/dev/bus/usb`，也没有权限
+`mknod` 造出来。启动 OpenOCD（Windows）：
 
 ```bash
 openocd -f interface/cmsis-dap.cfg -f target/rp2350.cfg -c "adapter speed 10000"
 ```
 
 **原生 Linux 开发机不需要 Windows/WSL 这一层**（2026-09 实测）：调试器直接挂在开发机上时，
-OpenOCD 就跑在本机，`gdb-multiarch` 连 `localhost:3333` 即可（实测 `1a86:7021`
-XV-Link CMSIS-DAP **v2**、`/usr/local/bin/openocd` 0.12.0），gdb 侧命令与上面两种接法完全相同。
-注意 openocd 0.12 把两个核当成 SMP 组，见下面"halt/resume 的坑"。
+OpenOCD 就跑在本机，`gdb-multiarch` 连 `localhost:3333` 即可（实测 `1a86:7021` XV-Link
+CMSIS-DAP **v2**、`/usr/local/bin/openocd` 0.12.0），gdb 侧命令与上面接法完全相同。
+注意 openocd 0.12 把两个核当成 SMP 组，见"halt/resume 的坑"。
 
-- `3333` = gdb 端口
-- `4444` = telnet 端口（可直接发 `monitor` 命令）
+- `3333` = gdb 端口；`4444` = telnet 端口（可直接发 `monitor` 命令）。
+
+## 板子上的工作方式（省时间，都是踩过的坑）
+
+真机验证每一轮都很贵，按这个来：
+
+1. **一轮只做一件事**：脚本先写好，一次 `scp` 上去跑完 —— 不要在一轮里串多次 ssh、gdb、构建。
+   板子一卡，一轮能白等十分钟。
+2. **可能挂住的命令一律套 `timeout`**（`lsusb`、`dmesg`、debugfs 读写、`make`）：USB 栈一卡，
+   `lsusb` 会永远不返回。**工具调用自己的超时压到 ≤4 分钟**，挂住要立刻暴露。
+3. **gdb 读固件是 30~60 s 级**的操作（连调试器 + halt 双核 + 读符号）：一轮最多读一次；
+   能用 `dmesg`/`usbmon` 说清就别读。
+4. **固件只编译一次**，产物留在板子上复用。
+5. 板子重启后**总线与路径会变**（`6-1` → `3-1`、usbmon 的 `6u` → `3u`）：脚本里动态发现，别写死。
+6. 下结论前**两侧都要看**：主机 `dmesg`/`usbmon` 与设备侧计数器（gdb）对得上才算数。
+7. **一轮里不要既改代码又做真机验证**：先改完、编译过，再上板。
 
 ## 常用操作
 
@@ -39,26 +61,19 @@ gdb-multiarch -q -nh \
   -ex "monitor resume" -ex "detach" -ex "quit"
 ```
 
-**要点**：连接会 halt 目标；读完必须 `monitor resume` 或 `detach` 让它继续跑，
-否则屏幕会停住。**千万不要**在只读检查时用 `monitor reset run` —— 那会重启固件、
-清掉计数器与显示状态。
-
-### 烧录
-
-见 [build-and-flash.md](build-and-flash.md)。
+**要点**：连接会 halt 目标；读完必须 `monitor resume` 或 `detach` 让它继续跑，否则屏幕会停住。
+**千万不要**在只读检查时用 `monitor reset run` —— 那会重启固件、清掉计数器与显示状态。
 
 ### 恢复卡死的板子
-
-固件跑飞（HardFault / 卡在 DMA 循环）时，简单复位即可：
 
 ```bash
 gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
   -ex "monitor reset run" -ex "detach" -ex "quit"
 ```
 
-**复位后主机可能认不回设备**（`lsusb` 里没有 `2e8a:0001`，pyusb 找不到）。现象是
-固件其实在正常跑，但 `usb_task` 一直停在"等枚举"上。原因多半是主机没看见一次干净的
-断开：**复位前先 halt 住停一会儿**即可（实测 2 秒足够）：
+**复位后主机可能认不回设备**（`lsusb` 里没有 `2e8a:0001`，pyusb 找不到）。现象是固件其实在
+正常跑，但 `usb_task` 一直停在"等枚举"上。原因多半是主机没看见一次干净的断开：**复位前先
+halt 住停一会儿**即可（实测 2 秒足够）：
 
 ```bash
 gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
@@ -66,18 +81,17 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
   -ex "monitor reset run" -ex "detach" -ex "quit"
 ```
 
-> 走断点调试（`monitor reset halt` → 断点 → `continue`）之后再 `reset run`，
-> 最容易踩到这个；最稳的是直接重烧一次。
+> 走断点调试（`monitor reset halt` → 断点 → `continue`）之后再 `reset run`，最容易踩到这个；
+> 最稳的是直接重烧一次。
 
 **另一种样子：`lsusb` 里还在，但每个请求都 `EIO`**（2026-09-30，直插 xHCI 根口）。
-`openocd ... program ... reset run` 烧完，`lsusb` 照常列出 `2e8a:0001`，可 pyusb 的
-`GET_CAPS` 控制请求报 `[Errno 5] Input/Output Error`，openocd 也打出
-`could not read product string ... Input/Output Error`。设备侧读到的是：
-`s_configured = 0`、`s_ep1` 全 0、`ADDR_ENDP = 0`（地址被复位清掉了）、`SIE_CTRL` 上拉开着、
-两个核都在 idle 任务里、`CFSR`/`HFSR` = 0 —— 固件好好的，只是**没被重新枚举**：复位太快，
-主机没看到断开，还拿旧地址跟它说话（`dmesg` 里也没有新的 `new full-speed USB device`）。
-上面的"halt 住停 2 秒再 `reset run`"这次**没用**；**从主机侧复位端口**立刻恢复
-（`dmesg`：`reset full-speed USB device number 68`，随后 caps 正常）：
+`openocd ... program ... reset run` 烧完，`lsusb` 照常列出 `2e8a:0001`，可 pyusb 的 `GET_CAPS`
+控制请求报 `[Errno 5] Input/Output Error`，openocd 也打出 `could not read product string ...
+Input/Output Error`。设备侧读到的是：`s_configured = 0`、`s_ep1` 全 0、`ADDR_ENDP = 0`（地址被
+复位清掉了）、`SIE_CTRL` 上拉开着、两个核都在 idle 任务里、`CFSR`/`HFSR` = 0 —— 固件好好的，
+只是**没被重新枚举**：复位太快，主机没看到断开，还拿旧地址跟它说话。上面的"halt 住停 2 秒再
+`reset run`"这次**没用**；**从主机侧复位端口**立刻恢复（`dmesg`：`reset full-speed USB device
+number 68`，随后 caps 正常）：
 
 ```bash
 .venv/bin/python -c 'import usb.core; usb.core.find(idVendor=0x2e8a, idProduct=0x0001).reset()'
@@ -87,8 +101,8 @@ gdb-multiarch -q -nh -ex "target extended-remote localhost:3333" \
 
 ### halt/resume 的坑：两个核是一个 SMP 组（2026-09 实测）
 
-openocd 0.12 的 `rp2350.cfg` 把 `rp2350.cm0` / `rp2350.cm1` 当成**一个 SMP 组**：`resume`
-会试着把整组一起放开，只要有一个成员不在停机状态就失败：
+openocd 0.12 的 `rp2350.cfg` 把 `rp2350.cm0` / `rp2350.cm1` 当成**一个 SMP 组**：`resume` 会
+试着把整组一起放开，只要有一个成员不在停机状态就失败：
 
 ```
 Error: [rp2350.cm1] not halted
@@ -97,9 +111,7 @@ Error: [rp2350.cm0] resume failed
 ```
 
 **失败的 resume 什么都不会恢复** —— 已经被 `halt` 的那个核就留在停机状态（主机侧表现就是
-"设备不响应"，很像固件挂死，但 flash 内容没坏）。
-
-正确顺序是**先让整组都停，再整组放开**：
+"设备不响应"，很像固件挂死，但 flash 内容没坏）。正确顺序是**先让整组都停，再整组放开**：
 
 ```tcl
 targets rp2350.cm0
@@ -112,54 +124,12 @@ resume
 
 自查 `targets` 的 State 列：halt 过的目标写 `halted due to debug-request`（停在 pico-sdk 那个
 `bkpt` stub 上时是 `halted due to breakpoint`）；**新会话里显示 `unknown` 是"运行中"的正常
-显示**，不是错误 —— 别把它当成挂死。
+显示**，别把它当成挂死。
 
 ## 解码流水线诊断
 
-### 计数器
-
-`src/decoders/decoder.c` 里三个 `volatile u32`：
-
-| 变量 | 含义 |
-| --- | --- |
-| `g_decoder_stat_submitted` | USB 回调交给解码器的帧数 |
-| `g_decoder_stat_dropped` | 因无空闲帧槽被**丢弃**的帧数 |
-| `g_decoder_stat_drawn` | 已完成绘制的帧数 |
-| `g_decoder_stat_oversize` | 载荷装不进帧槽的帧数（控制阶段本该先拒掉） |
-| `g_decoder_stat_lz4_oversize` | LZ4 专有：band 比 `lz4_band[]` 大（主机分带太粗） |
-| `g_decoder_stat_lz4_bad` | LZ4 专有：解码长度 ≠ 窗口像素数（截断/损坏/窗口不符） |
-
-判定标准：
-
-- ✅ `dropped == 0` 且 `drawn` 落后 `submitted` **恰好 1** → 流水线健康（1 帧在途）
-- ❌ `dropped` 持续增长 → **流控失效**，症状是局部刷新残影
-
-### 触发负载
-
-- 桌面动画本身就会产生数百帧/秒的局部刷新。
-- 想手动加压：向主机的 PUD fbdev 写随机数据。
-  **注意 fbN 编号不固定**，先确认哪个是 PUD：
-  ```bash
-  for f in /sys/class/graphics/fb*; do echo "$f: $(cat $f/name)"; done
-  # 找到 pud-drmdrmfb 对应的那个（可能是 fb0 也可能是 fb1）
-  ```
-
-### 断点追踪绘制
-
-仓库里有现成的 gdb 脚本（`.pud-test/trace_decode.gdb`、`drawmcu.gdb` 等）用于打印
-每次解码的窗口和尺寸：
-
-```gdb
-break qoi_drawimg
-commands
-  silent
-  printf "DECODE xs=%d ys=%d xe=%d ye=%d size=%d\n", xs, ys, xe, ye, qoi_size
-  continue
-end
-continue
-```
-
-> 断点式追踪会**严重拖慢**固件（每帧都停），只适合确认坐标是否正确，不要用来测吞吐。
+计数器清单、健康判据、加压方法与断点追踪脚本在
+[frame-pipeline.md](frame-pipeline.md)（计数器定义）与 [fps-bench.md](fps-bench.md)（FPS 基准）。
 
 ## HardFault 定位
 
@@ -180,11 +150,10 @@ faulting PC = usbd_ep_start_read+126
 r2 = <TFT 数据指针>
 ```
 
-根因：在 **USB 中断回调里直接解码**，JPEGDEC 吃栈远超中断栈容量 → 压栈失败。
-修法：中断里只 `decoder_submit_frame()` 搬运，解码交给 `decoder_task`（栈 1024 words / 4 KB）。
-
-**排查经验**：`CFSR` 的 `STKERR`/`MSTKERR` 基本可以直接判定为"某处栈不够"，
-优先怀疑在中断/小栈上下文里做了重活（解码、大数组、printf）。
+根因：在 **USB 中断回调里直接解码**，JPEGDEC 吃栈远超中断栈容量 → 压栈失败。修法：中断里只
+`decoder_submit_frame()` 搬运，解码交给 `decoder_task`（栈 1024 words / 4 KB）。
+**排查经验**：`CFSR` 的 `STKERR`/`MSTKERR` 基本可以直接判定为"某处栈不够"，优先怀疑在中断/
+小栈上下文里做了重活（解码、大数组、`printf`）。
 
 ### 判断"到底有没有出过故障"（无调试器排查用）
 
@@ -201,11 +170,11 @@ print/x $pc
 
 两个坑：
 
-- `isr_hardfault` 在本工程里是 pico-sdk 的**默认 stub**（`decl_isr_bkpt`），和
-  `isr_svcall` / `isr_pendsv` **同一个地址**。所以 `info symbol $pc` / `bt` 会把停在
-  HardFault 的核显示成 `isr_svcall` 之类 —— 别被名字骗了，**看寄存器**。
-- 出了 HardFault 的核会停在那条 `bkpt` 上，**不会自己恢复**；不用 `monitor reset run`
-  复位的话，主机侧看到的就是"设备不响应"。
+- `isr_hardfault` 在本工程里是 pico-sdk 的**默认 stub**（`decl_isr_bkpt`），和 `isr_svcall` /
+  `isr_pendsv` **同一个地址**。所以 `info symbol $pc` / `bt` 会把停在 HardFault 的核显示成
+  `isr_svcall` 之类 —— 别被名字骗了，**看寄存器**。
+- 出了 HardFault 的核会停在那条 `bkpt` 上，**不会自己恢复**；不用 `monitor reset run` 复位的
+  话，主机侧看到的就是"设备不响应"。
 
 ### 一次未定因的 HardFault（2026-09，怀疑是调试会话引起的）
 
@@ -226,18 +195,18 @@ pxCurrentTCBs[0] = "IDLE0"，pxStack = 0x20037880（256 words）
 
 - 出错的任务是 **core0 的 idle task**；`PSP − pxStack = 0x3c0`，栈顶在 0x20037c80，也就是说
   只用掉 16 个字 —— **不是栈溢出**。
-- `info symbol 0x20011338` → `g_usbd_core+664`（在 `.noncacheable` 里），而 **那个字里存的
-  是端点回调 `usbd_vendor_ep2_bulk_in`**。也就是说 PC 落在了一个**函数指针槽的地址**上，
-  不是函数本身：控制流被引到了数据区。
+- `info symbol 0x20011338` → `g_usbd_core+664`（在 `.noncacheable` 里），而**那个字里存的是
+  端点回调 `usbd_vendor_ep2_bulk_in`**。也就是说 PC 落在了一个**函数指针槽的地址**上，不是
+  函数本身：控制流被引到了数据区。
 - 把 `0x20011338` 处的两个字当代码读：半字 `0x801d` = `strh r5, [r3]`，而 `r3 = BFAR =
   0x130476dc` —— 和"精确存储错误"完全对上。即 CPU 从数据里开始取指，第一条就野写。
 
 **未定因**：无调试器下 3000/6000 × 32×32、150/300 帧桌面负载（都是 `--gap-ms 0`）跑完
 `CFSR`/`HFSR` 都是 0，所以最可能是那次排查时**反复停机/写内存的调试会话**造成的。当时用的
-`force_touch.gdb` 在断点命令里 `return <常量>` 强改 `ft6236_*` 的返回值（等于替目标改 PC 和栈），
-而且有几个 gdb 会话是被 `timeout` 杀掉的（gdb 被杀会把核留在停机状态）—— 这两件事都足以把核
-带到不一致的状态，是当前最可疑的来源。**存疑，未验证**；再遇到时按上面的步骤先抓 PSP 帧和
-`g_usbd_core` 里那组回调指针，看是哪一个槽被改了。
+`force_touch.gdb` 在断点命令里 `return <常量>` 强改 `ft6236_*` 的返回值（等于替目标改 PC 和
+栈），而且有几个 gdb 会话是被 `timeout` 杀掉的（gdb 被杀会把核留在停机状态）—— 这两件事都
+足以把核带到不一致的状态，是当前最可疑的来源。**存疑，未验证**；再遇到时按上面的步骤先抓
+PSP 帧和 `g_usbd_core` 里那组回调指针，看是哪一个槽被改了。
 
 **第二次现场（2026-09-26，原生 Linux，签名不同）**：只做了一次完全"干净"的 gdb 会话 ——
 attach → 读三个计数器 → `monitor resume` → `detach`，没有断点、没有写内存、gdb 正常退出 ——
@@ -263,32 +232,28 @@ halt/读/resume（不挂 gdb）全都没触发，只有 gdb attach 那次出了 
 ## 任务栈水位与栈保护
 
 任务栈在建栈时被内核填成 `0xa5`（`tskSET_NEW_STACKS_TO_KNOWN_VALUE`，本工程因为
-`configUSE_TRACE_FACILITY 1` 而生效），所以**从 `pxStack` 往上数连续的 `0xa5` 就是没用过的部分**，
-峰值 = 栈深 − 这段长度。全程只读内存，不用改固件，也不用调 `uxTaskGetStackHighWaterMark()`。
+`configUSE_TRACE_FACILITY 1` 而生效），所以**从 `pxStack` 往上数连续的 `0xa5` 就是没用过的
+部分**，峰值 = 栈深 − 这段长度。全程只读内存，不用改固件，也不用调 `uxTaskGetStackHighWaterMark()`。
 
-做法：`monitor halt` 后，用 gdb 的 Python 遍历 FreeRTOS 任务链表
-（`pxReadyTasksLists[]`、`pxDelayedTaskList`、`pxOverflowDelayedTaskList`、
-`xPendingReadyList`、`xSuspendedTaskList`，取每个 `ListItem_t` 的 `pvOwner`），
-再按各 TCB 的 `pxStack` 扫内存。坑：
+做法：`monitor halt` 后，用 gdb 的 Python 遍历 FreeRTOS 任务链表（`pxReadyTasksLists[]`、
+`pxDelayedTaskList`、`pxOverflowDelayedTaskList`、`xPendingReadyList`、`xSuspendedTaskList`，
+取每个 `ListItem_t` 的 `pvOwner`），再按各 TCB 的 `pxStack` 扫内存。坑：
 
 - `configRECORD_STACK_HIGH_ADDRESS 0` → TCB 里**没有** `pxEndOfStack`，栈深得自己从创建点带进去。
-- 实测峰值（当前声明值）：`decoder_task` 496 B / 4 KB —— **空转和满载全屏解码一模一样**，
+- 实测峰值（当前声明值）：`decoder_task` 496 B / 4 KB（QOI）—— **空转和满载全屏解码一模一样**，
   整条 QOI 路径（含开机 logo 那一帧）峰值 ≤ 496 B；切到 `DECODER_TYPE=1` 实测
-  **JPEGDEC 整帧 480×320 是 632 B**、`DECODER_TYPE=0`（tjpgd）是 **600 B**
-  （这两条就是 4096 words 缩到 1024 的依据）；
-  `usb_task` 416 B / 1 KB、`indev_read` 432 B / 1 KB、`Tmr Svc` 152 B / 1 KB、
-  idle 112~128 B / 1 KB。
-- 要量某个 `DECODER_TYPE` 的路径，把 `CMakeLists.txt` 里的 `DECODER_TYPE` 改过去重烧即可 ——
-  开机的 logo 正好是按该类型编码的**整屏图**，所以不用主机脚本就能把整条解码路径跑一遍
-  （用 `g_bl_priv.bl_lvl == 100` 判断它真的画完了）。
-- 想确认某条路径（比如 `printf`）有没有真的进过某个栈：把该栈已用部分的字当返回地址，
-  拿 `arm-none-eabi-nm` 的符号表反查。`indev_read` 的栈上能查到
-  `_vsnprintf` / `stdio_buffered_printer`，说明 `printf` 的开销已经算在峰值里了。
-- 已删除的任务也能量（`bootlogo_task` 曾经就是这种，现在已经并进 `decoder_task`）：
-  `heap_3` 下 `free()` 只覆盖块首 8 字节，栈里的 `0xa5` 边界还在。TCB 偏移是
-  `pxStack@+52`、`pcTaskName@+64`（`ptype /o TCB_t` 可查），用 RAM 里残留的任务名字符串
-  反推出 TCB，再读 `pxStack`。判断任务是否真的没了，还可以看 heap 布局：
-  删掉一个任务后，后面任务的 `pxStack` 会整体前移一个 TCB + 栈的距离。
+  **JPEGDEC 整帧 480×320 是 632 B**、`DECODER_TYPE=0`（tjpgd）是 **600 B**（这两条就是
+  4096 words 缩到 1024 的依据）；`usb_task` 416 B / 1 KB、`indev_read` 432 B / 1 KB、
+  `Tmr Svc` 152 B / 1 KB、idle 112~128 B / 1 KB。
+- 要量某个 `DECODER_TYPE` 的路径，把构建切过去重烧即可 —— 开机的 logo 正好是按该类型编码的
+  **整屏图**，所以不用主机脚本就能把整条解码路径跑一遍（用 `g_bl_priv.bl_lvl == 100` 判断它
+  真的画完了）。
+- 想确认某条路径（比如 `printf`）有没有真的进过某个栈：把该栈已用部分的字当返回地址，拿
+  `arm-none-eabi-nm` 的符号表反查。`indev_read` 的栈上能查到 `_vsnprintf` /
+  `stdio_buffered_printer`，说明 `printf` 的开销已经算在峰值里了。
+- 已删除的任务也能量（`bootlogo_task` 曾经就是这种，现在已并进 `decoder_task`）：`heap_3` 下
+  `free()` 只覆盖块首 8 字节，栈里的 `0xa5` 边界还在。TCB 偏移是 `pxStack@+52`、`pcTaskName@+64`
+  （`ptype /o TCB_t` 可查），用 RAM 里残留的任务名字符串反推出 TCB，再读 `pxStack`。
 
 ### 栈溢出会不会静默踩内存
 
@@ -302,15 +267,14 @@ halt/读/resume（不挂 gdb）全都没触发，只有 gdb attach 那次出了 
   ```
   所以 `configCHECK_FOR_STACK_OVERFLOW 0` 在这个端口上可以接受，代价只是溢出表现为卡死，
   没有 `vApplicationStackOverflowHook` 能报告。
-- **中断栈（MSP）**：`__StackBottom`~`__StackTop` 每核 **2 KB**（`StackSize = 0x800`，
-  core 1 用 `__StackOne*`），下面紧挨着 core 1 的栈 / BSS / 堆顶（`__HeapLimit = 0x20080000`）。
-  portasm 里搜不到 `msplim`，CMake 也没开 `PICO_USE_STACK_GUARDS` —— **溢出不会立刻 fault**。
+- **中断栈（MSP）**：`__StackBottom`~`__StackTop` 每核 **2 KB**（`StackSize = 0x800`，core 1 用
+  `__StackOne*`），下面紧挨着 core 1 的栈 / BSS / 堆顶（`__HeapLimit = 0x20080000`）。portasm
+  里搜不到 `msplim`，CMake 也没开 `PICO_USE_STACK_GUARDS` —— **溢出不会立刻 fault**。
   这就是"解码只能在 `decoder_task` 里做"这条规矩的由来。
 
 ## 串口日志
 
-调试串口 UART 115200（TX 16 / RX 17），`main.c` 里 `stdio_uart_init_full()`。
-开机打印：
+调试串口 UART 115200（TX 16 / RX 17），`main.c` 里 `stdio_uart_init_full()`。开机打印：
 
 ```
 PICO USB Display
@@ -319,119 +283,12 @@ Decoder type: QOI
 calling freertos scheduler, <us>
 ```
 
-`Decoder type:` 这行会暴露 `decoder_names[]` 的越界问题
-（若 `DECODER_TYPE` 超出数组范围，这里会是乱码或崩溃）。
+`Decoder type:` 这行会暴露 `decoder_names[]` 的越界问题（若 `DECODER_TYPE` 超出数组范围，
+这里会是乱码或崩溃）。
 
-## 全刷 / 局刷 FPS 基准
+## 相关
 
-> 完整的脚本清单、共享模块与依赖选型见 [scripts.md](scripts.md)。
+- FPS 基准、bootlogo +5.6% 未结案、复位后枚举、EP1 自愈验收：[fps-bench.md](fps-bench.md)
+- 帧槽、流控与计数器定义：[frame-pipeline.md](frame-pipeline.md)
+- 烧录与构建：[build-and-flash.md](build-and-flash.md)
 
-`tools/fps_bench.py` 是主机端**端到端**基准：计时段只包含 EP0 控制请求 + EP1
-批量传输，帧编码在计时前预先生成、不计入，所以数字反映的是链路 + 设备，而不是 Python。
-
-它要求设备**没有被 `pud` 驱动占用**（pyusb 需要 claim 接口）：
-
-```bash
-sudo cp 60-pico-usb-display.rules /etc/udev/rules.d/   # 装一次，之后免 root
-sudo rmmod pud
-./tools/fps_bench.py --frames 200
-```
-
-不带设备也能先看各用例的载荷大小：
-
-```bash
-./tools/fps_bench.py --dry-run
-```
-
-用例与关注点：
-
-| 用例 | 说明 |
-| --- | --- |
-| `full / solid,gradient,photo,noise` | 全刷四档内容，QOI 体积从 2.5 KB 到 444 KB |
-| `full / <pattern> (单次传输)` | 整帧能装进一次传输时，对比消耗在"驱动分带规则"上的开销 |
-| `partial / 64x64, 128x64, 480x8` | 固定居中窗口，内容逐帧变化 |
-
-输出里两个值最关键：
-
-- **`min`** —— 最快的一帧。此时设备空闲（两个帧槽都是空的），所以它≈**纯 USB 传输**上限。
-- **`median`** —— 稳态周期。`median / min` 比值大说明**瓶颈在设备侧**（解码/刷屏）；
-  接近 1 说明**瓶颈在 USB 带宽**。
-
-> **跨版本比较必须带用例标签。** 两个 full 用例的地板差一倍以上：
-> `(单次传输)` 整帧一次发完（纯色 min ≈ 2.6 ms），而分带用例要 8 段、每段一次往返
-> （纯色 min 就已经 ≈ 5.7 ms，`steady/min ≈ 1.04`，判定"USB 受限"）。
-> 也就是说 **5.06 ms 这种数字只可能出自 `(单次传输)`**，拿它跟分带的 5.9 ms 比会得出
-> 完全错误的结论。历史优化链（36.27 → 8.00 → 5.63 → 5.06 ms）用的都是
-> `full/solid（单次传输）`。
-
-> 主机的 USB 会话本身也会漂：同一版固件在不同时间测，`min` 与稳态会一起上下浮动
-> 0.1~0.4 ms（设备今天被反复复位/重枚举）。**要判定"改动有没有影响性能"，必须
-> A/B 交替烧写、各测多次看是否稳定分离**，不要跨时间比单次数字。
-
-### 一个未结案的偏差：bootlogo 并进 `decoder_task` 后 +5.6%
-
-A/B 交替烧写（同一主机、同一脚本、各 2 次，`full/solid（单次传输）`，都稳到 ±0.02 ms）：
-
-| 固件 | 每帧 |
-| --- | --- |
-| HEAD（logo 由独立 `bootlogo_task` 画） | 5.20 / 5.23 ms |
-| 工作区（logo 画在 `decoder_task` 里） | 5.50 / 5.52 ms |
-
-**已用单变量实验排除**（每项都各测 2~3 次）：
-
-- 解码/刷屏指令序列 —— 归一化反汇编（去掉地址）后 `qoi_flush`、
-  `rgb565_qoi_decompress_callback` **逐条相同**；
-- `EP1_RD_BUF_SIZE` 64 KB ↔ 128 KB —— 都是 5.50 ms（所以那次 64 KB 的 .bss 平移不是原因）；
-- `decoder_task` 栈 1024 ↔ 4096 words —— 都是 5.50 ms（**栈收缩本身性能中性**）；
-- `DECODER_STATS` 0/1、核分配（两种都在 core 1）。
-
-**剩余嫌疑**：bootlogo 重构本身（连同被删掉的 `decoder_mutex`）—— 稳态下它唯一留下的
-差别是每个 `decoder_drawimg` 少了两次 mutex 进出。影响面只限"整屏单次传输"这一档
-（设备侧受限）；局刷与 DRM damage 那几档是 USB 受限，不受影响。
-
-处置：该重构与 RP2040 那三项改动（协议校验、按板分缓冲、能力查询）**互相独立**，
-可以单独回退换回这 5.6%。**未结案，别当成已解决。**
-
-
-编码器与固件/驱动共用的 `rgb565_qoi.c` **逐字节一致**（已用 solid/gradient/noise/run
-四类图案对照 C 输出验证），所以这里量到的字节数就是驱动实际会发的字节数。
-
-> 注意：测 `480x320` 全刷时驱动规则会切成 **8 段**（`21835 / 480 = 45` 行/段，
-> `ceil(320/45) = 8`）。photo/noise 的整帧流超过固件帧槽 64 KB，**必须**分带。
-
-## 复位后的枚举
-
-用 `monitor reset run` 重启固件后，主机会看到一次 USB disconnect + connect，
-驱动会重新 probe。主机的 `dmesg` 里能看到 `pud_drm_setup` 一路到 `pud_drm_pipe_enable`。
-如果列表里旧的 `cardN` 还在、新的多出来一个，那是正常的（旧节点会被 udev 清掉）。
-
-## EP1 自愈的验收（真机）
-
-在**板子上**跑 pyusb 脚本，逐个触发失效，每步之间发一帧正常画面。前提：
-
-- `pud` 驱动 unbind 掉（`echo 6-1:1.0 > /sys/bus/usb/drivers/pud/unbind`，跑完再 bind 回来）；
-- 板子上有 pyusb（缺 `ensurepip` 时先 `apt install python3.12-venv`）：
-  `python3 -m venv ~/pud-venv && ~/pud-venv/bin/pip install pyusb`；
-- 设备侧计数器用 gdb 读 `s_ep1` / `g_ep1_stat`（见"只读状态"），脚本前后各读一次比增量
-  （计数器按 MCU 上电清零）。
-
-| 步骤 | 主机动作 | 期望 |
-| --- | --- | --- |
-| 基线 | 发一帧 64x64 | 成功 |
-| 空闲 | `sleep 5` 后发一帧 | 成功（空闲不需要任何补救，`stale` 不增长） |
-| 中途断流 | header 声明 4000 B 只发 100 B，`sleep 1.2` 后发一帧 | 成功，`stale` +1 |
-| ZLP | header 声明 52 B + 52 B 载荷（正好 64 B，主机会补一个 ZLP），再发一帧 | 成功（实测 5/5，计数不变） |
-| 全屏 | 发一帧 480x320 | 成功 |
-| 超长 header（放最后） | header 声明 `> EP1_RD_BUF_SIZE`，再发一帧正常画面 | **主机侧看不到错误**（设备丢弃这一笔并重新武装），`oversize` +1，下一帧照常成功 |
-
-**为什么"超长"不再产生 stall**：设备侧把不可信的 header **丢弃并重新武装**，而不是 stall
-EP1（见 [usb-protocol.md](usb-protocol.md) 的"失效与自愈"）。stall 会让主机 `clear_halt()`
-重试，实测那条路会把宿主控制器卡死。所以这一步现在只验证"丢弃之后下一帧照常"，主机侧
-应当**没有任何错误**。
-
-正常主机（驱动刷屏）下应当**永远**是 `bad = 0`、`oversize`/`stale` 不增长、`dropped = 0`：
-受控测量 20 s 全屏刷新 = 181 笔传输 / 182 次完成 / **0 失败**。
-
-**读计数时的两个坑**：一是每步用 `unbind` 拆驱动会打断在途传输，一轮验收下来 `oversize`
-会涨十几（实测 15），那是拆装的代价、不是故障 —— 判据是 `bad`/`dropped` 保持 0 且
-`submitted == drawn`；二是这些计数器按 MCU 上电清零，所以**只能比前后增量**，不要看绝对值。

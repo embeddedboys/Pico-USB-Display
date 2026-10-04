@@ -38,9 +38,10 @@ SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -Wl,--print-me
 SET(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -Wl,--print-memory-usage")
 
 set(PICO_DISPLAY_LIB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/pico-display-lib)
-# The library's own copies of the panel configs.  The build includes this
-# repository's configs/ instead (see PUD_CONFIG below) -- same files, but a local
-# panel tweak then stays here rather than going into the library.
+# configs/ is a symlink to the library's configs/ (git mode 120000), so there is
+# exactly one copy of the panel configs and both repositories see the same files.
+# Editing one from here therefore edits the submodule -- it does not keep a local
+# tweak out of the library.
 set(PICO_DISPLAY_LIB_CONFIG_PATH ${PICO_DISPLAY_LIB_PATH}/configs)
 set(CHERRY_USB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/CherryUSB)
 set(LZ4_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/lz4)
@@ -54,11 +55,10 @@ pico_sdk_init()
 
 # **********  select the suitable config file  **********
 #
-# The panel config comes from this repository's own configs/ directory -- the same
-# set the library ships, but a local tweak of one panel then stays here instead of
-# going into the library.  `./build.sh lunch` records the choice in .pud-config and
-# passes it as PUD_CONFIG; a plain `cmake ..` (or a checkout that has never run
-# lunch) builds the default below.
+# The panel config comes from configs/, which is a symlink to the library's own
+# configs/ -- one copy, shared.  `./build.sh lunch` records the choice in
+# .pud-config and passes it as PUD_CONFIG; a plain `cmake ..` (or a checkout that
+# has never run lunch) builds the default below.
 set(PUD_CONFIG "pico_dm_qd3503728" CACHE STRING
     "panel config from configs/ (see ./build.sh configs)")
 set(PUD_CONFIG_DIR ${CMAKE_CURRENT_LIST_DIR}/configs CACHE PATH
@@ -118,6 +118,19 @@ include(${PUD_SOURCE_DIR}/decoders/config.cmake)
 set(PUD_CODEC_IN_RAM 1 CACHE STRING "run the QOI/RLE decode loops from SRAM")
 
 # Add libs or source files in subdirs
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/FreeRTOS-Kernel CACHE PATH
+    "Path to the FreeRTOS kernel" FORCE)
+set(FREERTOS_CONFIG_FILE_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/include)
+add_library(freertos_config INTERFACE)
+target_include_directories(freertos_config SYSTEM INTERFACE
+    ${FREERTOS_CONFIG_FILE_DIRECTORY})
+option(PUD_FREERTOS_RUN_TIME_STATS
+    "collect FreeRTOS task run time stats (debug; adds context-switch overhead)"
+    OFF)
+target_compile_definitions(freertos_config INTERFACE
+    PUD_FREERTOS_RUN_TIME_STATS=$<BOOL:${PUD_FREERTOS_RUN_TIME_STATS}>)
+include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/Community-Supported-Ports/GCC/RP2350_ARM_NTZ/FreeRTOS_Kernel_import.cmake)
+
 add_subdirectory(${PICO_DISPLAY_LIB_PATH})
 add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
 add_subdirectory(${PUD_SOURCE_DIR}/decoders)
@@ -210,6 +223,7 @@ set(QOI_NONCALLBACK ${_qoi_noncallback_default} CACHE STRING
 set(QOI_BUF_ROWS 8 CACHE STRING "QOI callback-path accumulation buffer height in rows")
 
 add_executable(${PROJECT_NAME})
+set_property(TARGET ${PROJECT_NAME} PROPERTY LINKER_LANGUAGE C)
 
 target_sources(${PROJECT_NAME} PRIVATE
     ${PUD_SOURCES}
@@ -239,6 +253,15 @@ target_link_libraries(${PROJECT_NAME}
     miniz
     libdeflate
     tinyd
+    freertos_config
+    # Heap3 stays.  It looks like it makes configTOTAL_HEAP_SIZE meaningless,
+    # and it does -- but the bound it lacks is already enforced underneath:
+    # _sbrk checks 0x20080000 and returns NULL rather than growing into the
+    # interrupt stack (notes/pitfalls-memory.md 3.2).  What was actually
+    # missing was visibility, and heap_3.c does call
+    # vApplicationMallocFailedHook() when configUSE_MALLOC_FAILED_HOOK is 1,
+    # so that is where the fix belongs -- it costs no RAM, where heap_4 would
+    # reserve 16 KB for a kernel that only needs about 10 KB.
     FreeRTOS-Kernel-Heap3
 )
 

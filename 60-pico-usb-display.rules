@@ -11,6 +11,8 @@
 
 # Pico USB Display (the firmware's vendor interface)
 SUBSYSTEM=="usb", ATTR{idVendor}=="2e8a", ATTR{idProduct}=="0001", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="303a", ATTR{idProduct}=="3503", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", MODE="0666"
 
 # RP-series bootrom (BOOTSEL) and the SDK's CDC firmware: picotool, and the uf2
 # drag & drop path.  The PIDs are the ones picotool's own 60-picotool.rules lists,

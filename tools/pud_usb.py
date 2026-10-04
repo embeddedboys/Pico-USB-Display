@@ -43,14 +43,19 @@ import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 # ---------------------------------------------------------------------------
 # Protocol (keep in sync with src/cherryusb/usbd_vendor.h)
 # ---------------------------------------------------------------------------
 
-VID = 0x2E8A
-PID = 0x0001
+DEVICE_IDS = (
+    (0x2E8A, 0x0001),  # Raspberry Pi Pico/Pico 2 firmware
+    (0x303A, 0x3503),  # ESP32-S3 firmware
+)
+VID, PID = DEVICE_IDS[0]
+_AUTO_DEVICE_IDS = object()
 
 EP_DIR_OUT = 0x00
 EP_DIR_IN = 0x80
@@ -151,6 +156,7 @@ USB_TRANS_MAX_SIZE = 65535
 #: (PUD_MAX_BAND_PIXELS), which costs nothing in sustained throughput.
 PUD_MAX_BAND_PIXELS = (USB_TRANS_MAX_SIZE - EP1_HEADER_SIZE - 16) // 3
 
+EP2_PREPOST_DELAY_S = 0.05   # let the read reach the host controller first
 DEFAULT_TIMEOUT_MS = 5000
 
 #: EP4 touch report, 8 bytes, byte-explicit (see notes/usb-protocol.md):
@@ -428,10 +434,15 @@ QOID_WINDOWS = 4
 #: `Display.delta_win` carries the value the host builds against.
 PUD_DELTA_WIN = 32 * 1024
 
-#: Device frame slots (DECODER_FRAME_SLOTS in the firmware).  Slots are handed
-#: out round-robin, so the k-th submission of a session lands in slot
-#: k % DECODER_FRAME_SLOTS and finds the band submitted that many submissions
-#: earlier.  `Display.frame_slots` carries it.
+#: Device frame slots (DECODER_FRAME_SLOTS in the firmware).  The slot a band
+#: lands in is the lowest free one, so it is *not* `submission % slots` unless
+#: the pipeline happens to be saturated -- which is why a `DECODER_TYPE 6`
+#: delta names the band its dictionary was built from (`dict_serial`) instead
+#: of the host predicting a slot.  `Display.frame_slots` carries it.
+#:
+#: `PUD_CMD_GET_CAPS` does not report this number, so it is a host-side
+#: constant; getting it wrong does not corrupt the picture, it only makes the
+#: device refuse deltas and count `g_decoder_stat_qoid_mismatch`.
 DECODER_FRAME_SLOTS = 3
 
 
@@ -729,18 +740,77 @@ def ffmpeg_frames(cmd, width, height):
 # Device
 # ---------------------------------------------------------------------------
 
-def open_device():
-    """Find the display and claim its interface."""
+READY_TIMEOUT_S = 10.0
+READY_INTERVAL_S = 0.2
+
+
+def wait_ready(disp, timeout=READY_TIMEOUT_S, interval=READY_INTERVAL_S):
+    """Wait until the device answers a control request, and return its caps.
+
+    A device that has just been reset can enumerate before its application
+    starts servicing vendor requests, and then the first control transfer fails
+    with LIBUSB_ERROR_IO.  A single attempt cannot tell that from a transport
+    that is genuinely broken -- both are an I/O error.
+
+    This retries, and if the device still does not answer it reports what it
+    observed rather than guessing why: "did not answer after N seconds" is a
+    fact, while "still starting up" is a cause, and one that has already been
+    wrong once here (a device that never answered was called a startup delay).
+
+    Only transport errors are retried.  A PudError means the device answered
+    and the answer was wrong, which retrying would only hide; anything else
+    keeps whatever meaning its caller already gave it.
+    """
+
+    deadline = time.monotonic() + timeout
+    last = None
+
+    while True:
+        try:
+            return disp.query_caps()
+        except PudError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - classified just below
+            # 5 EIO, 110 ETIMEDOUT, 19 ENODEV: the transport is not up yet.
+            if getattr(exc, "errno", None) not in (5, 110, 19):
+                raise
+            last = exc
+            if time.monotonic() >= deadline:
+                raise PudError(
+                    "the device enumerated but did not answer a control "
+                    "request after %.0fs of retries (%s)" % (timeout, last))
+            time.sleep(interval)
+
+
+def open_device(vid=_AUTO_DEVICE_IDS, pid=_AUTO_DEVICE_IDS):
+    """Find the display and claim its interface.
+
+    With no identifiers, probe the supported PUD panel identifiers.  Explicit
+    `vid`/`pid` values select exactly that device, so a test or tool can look
+    elsewhere without editing the module constants --
+    tests/common/harness.py forwards its --vendor/--product here, and that
+    keeps the USB identifiers in exactly one place.
+    """
     try:
         import usb.core
         import usb.util
     except ImportError:
         raise PudError("pyusb is required: pip install pyusb")
 
-    dev = usb.core.find(idVendor=VID, idProduct=PID)
+    dev = None
+    if vid is _AUTO_DEVICE_IDS and pid is _AUTO_DEVICE_IDS:
+        device_ids = DEVICE_IDS
+    elif vid is _AUTO_DEVICE_IDS or pid is _AUTO_DEVICE_IDS:
+        raise PudError("vid and pid must be supplied together")
+    else:
+        device_ids = ((vid, pid),)
+    for candidate_vid, candidate_pid in device_ids:
+        dev = usb.core.find(idVendor=candidate_vid, idProduct=candidate_pid)
+        if dev is not None:
+            break
     if dev is None:
-        raise PudError("device %04x:%04x not found -- is it plugged in?"
-                       % (VID, PID))
+        ids = ", ".join("%04x:%04x" % pair for pair in device_ids)
+        raise PudError("device not found (tried %s) -- is it plugged in?" % ids)
 
     try:
         usb.util.claim_interface(dev, 0)
@@ -762,10 +832,10 @@ def open_device():
 
     disp = Display(dev)
     try:
-        disp.query_caps()
+        wait_ready(disp)
     except PudError:
-        # A protocol mismatch is not something to paper over: the transfer
-        # framing differs, so say so instead of failing on a mystery timeout.
+        # Either a protocol mismatch, which is not something to paper over, or
+        # a device that never came up -- both are worth reporting as they are.
         raise
     except Exception:
         # No capability report (an older firmware): keep the host defaults.
@@ -1132,10 +1202,47 @@ class Display:
 
     def get_sn(self):
         """Read the 8-byte board unique id."""
+        return self.send_query(CMD_GET_SN, 8, timeout=DEFAULT_TIMEOUT_MS)
+
+    def send_query(self, cmd, length, timeout=None):
+        """Send one ``REQ_EP2_IN`` query and read up to `length` bytes back.
+
+        The low-level half of every command on this channel, kept here so that
+        callers (and tests) do not each re-derive the 4-byte request header and
+        the bulk read.  An unsupported command answers with a zero-length
+        packet, which pyusb surfaces as a short read or a timeout on the bulk
+        transfer -- that *is* the documented "not supported" signal, so this
+        method does not hide it.
+        """
+        # Post the read before the request, not after.
+        #
+        # The device arms its EP2 answer while the control transfer is still in
+        # flight, and the ArtInChip UDC reports that transfer complete even when
+        # the host has not polled yet -- so a read issued afterwards blocks until
+        # it times out and the answer is gone.  Reading first is correct on both
+        # platforms; the RP2350 merely tolerates the other order.
+        # See zx-rtt-sdk/notes/usb.md.
+        result = {}
+
+        def _reader():
+            try:
+                result["data"] = bytes(
+                    self.dev.read(EP2_IN_ADDR, length,
+                                  timeout=int(timeout or DEFAULT_TIMEOUT_MS)))
+            except Exception as exc:  # re-raised below, in the caller's thread
+                result["error"] = exc
+
+        reader = threading.Thread(target=_reader, daemon=True)
+        reader.start()
+        time.sleep(EP2_PREPOST_DELAY_S)
         self.dev.ctrl_transfer(
             TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_SN, 8))
-        return bytes(self.dev.read(EP2_IN_ADDR, 8, timeout=DEFAULT_TIMEOUT_MS))
+            struct.pack("<HH", cmd, length))
+        reader.join()
+
+        if "error" in result:
+            raise result["error"]
+        return result.get("data", b"")
 
     def query_caps(self, timeout=None):
         """Ask the device what it accepts (``PUD_CMD_GET_CAPS``).
@@ -1148,11 +1255,7 @@ class Display:
         parameters answers with the first 16 bytes and is accepted.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        self.dev.ctrl_transfer(
-            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_CAPS, CAPS_STRUCT.size))
-        raw = bytes(self.dev.read(EP2_IN_ADDR, CAPS_STRUCT.size,
-                                  timeout=timeout))
+        raw = self.send_query(CMD_GET_CAPS, CAPS_STRUCT.size, timeout=timeout)
         if len(raw) < CAPS_V1_SIZE:
             return None
         magic, proto_ver, frame_max, decoder_type = CAPS_V1.unpack(
@@ -1165,8 +1268,10 @@ class Display:
                 "rectangle now travels in the EP1 header, so update whichever "
                 "side is older" % (proto_ver, PUD_PROTO_VER))
 
-        self.caps = dict(proto_ver=proto_ver, frame_max=frame_max,
-                         decoder_type=decoder_type)
+        # `magic` is already checked above; it is reported too so a test can
+        # assert the framing it saw rather than infer it from a None return.
+        self.caps = dict(magic=magic, proto_ver=proto_ver,
+                         frame_max=frame_max, decoder_type=decoder_type)
         if len(raw) >= CAPS_STRUCT.size:
             (_magic, _proto, _frame_max, _decoder, xres, yres, pixelclock_khz,
              rotation, bpp, intf_type, tp_polling_period,
@@ -1205,11 +1310,8 @@ class Display:
         Returns ``settable``/``rejected`` masks plus the current values.
         """
         timeout = timeout or DEFAULT_TIMEOUT_MS
-        self.dev.ctrl_transfer(
-            TYPE_VENDOR | EP_DIR_OUT, REQ_EP2_IN, 0, 0,
-            struct.pack("<HH", CMD_GET_PARAM, PARAM_STATE_STRUCT.size))
-        raw = bytes(self.dev.read(EP2_IN_ADDR, PARAM_STATE_STRUCT.size,
-                                  timeout=timeout))
+        raw = self.send_query(CMD_GET_PARAM, PARAM_STATE_STRUCT.size,
+                              timeout=timeout)
         if len(raw) < PARAM_STATE_STRUCT.size:
             raise PudError(
                 "PUD_CMD_GET_PARAM answered %d of %d bytes -- firmware without "

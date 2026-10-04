@@ -54,9 +54,13 @@ typedef signed int s32;
  * struct pud_caps -- the caps struct is a protocol field the driver already
  * parses at a fixed size, and an unknown command is simply never sent.
  *
- * NOT ANSWERED YET: the handler existed and hung the pipeline on hardware, so
- * it was pulled; the shapes are kept because they are the design.  See
- * notes/todo.md item 13 before wiring it up. */
+ * Answered since 2026-10: the EP2 FSM in usb.c handles it and
+ * qoid_read_state() fills the struct (a build without dictionary windows
+ * answers magic plus zero slots, so a host can tell "no windows" from
+ * "command unknown").  It is a query, so the host pays only when it asks --
+ * one costs about 2.9 ms, twenty times a control transfer, so ask at most
+ * once per frame.  The kernel driver does not send it yet; the authoritative
+ * definition is PUD-kernel-drivers/notes/usb-protocol.md. */
 #define PUD_CMD_GET_QOID 0x05
 
 /* Device capabilities, answered by PUD_CMD_GET_CAPS on the EP2 IN path.  The
@@ -90,6 +94,18 @@ struct pud_caps {
 	u16 height_mm;
 	u16 flags; /* PUD_CAPS_*: what this build actually has */
 };
+
+/*
+ * The wire size, stated where the compiler can check it.  `struct pud_caps` is
+ * a protocol field: the host unpacks a fixed layout, and a field inserted in
+ * the middle (rather than appended) would silently shift every value after it.
+ * 32 is what both sides ship today; the first 16 bytes are the pre-panel-field
+ * layout an older host still reads.  tests/test_protocol_constants.py compares
+ * this with the host mirror's struct.Struct size.
+ */
+#define PUD_CAPS_SIZE 32
+_Static_assert(sizeof(struct pud_caps) == PUD_CAPS_SIZE,
+               "pud_caps wire size (append only, never reorder)");
 
 /*
  * Capability flags.  Touch is optional: most board configs in
@@ -137,6 +153,16 @@ struct pud_param_state {
 	u8 reserved;
 	u8 decoder;
 };
+
+/* Wire sizes of the parameter structs, checked where they are defined: the
+ * `reserved` byte in each exists precisely to keep the layout aligned with no
+ * hidden padding, and the host unpacks a fixed layout. */
+#define PUD_PARAMS_SIZE 8
+#define PUD_PARAM_STATE_SIZE 12
+_Static_assert(sizeof(struct pud_params) == PUD_PARAMS_SIZE,
+               "pud_params wire size");
+_Static_assert(sizeof(struct pud_param_state) == PUD_PARAM_STATE_SIZE,
+               "pud_param_state wire size");
 
 /*
  * EP1 OUT framing (protocol v2).
@@ -192,6 +218,12 @@ struct pud_qoid_state {
 	 * RP2040 -- so a host that assumes one number breaks on the other. */
 	u32 window;
 };
+
+/* Wire size, checked here like the other protocol structs: 9 u32 fields, no
+ * padding.  The host pins the same layout as pud_usb.QOID_STATE. */
+#define PUD_QOID_STATE_SIZE 60
+_Static_assert(sizeof(struct pud_qoid_state) == PUD_QOID_STATE_SIZE,
+               "pud_qoid_state wire size");
 
 struct disp_data {
 	u16 xres;

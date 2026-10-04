@@ -10,3 +10,6 @@
 [submodule "lib/pico-turbo"]
 	path = lib/pico-turbo
 	url = https://github.com/IotaHydrae/pico-turbo.git
+[submodule "FreeRTOS-Kernel"]
+	path = lib/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
