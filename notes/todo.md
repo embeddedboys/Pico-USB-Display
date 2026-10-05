@@ -52,12 +52,21 @@ HEAD（logo 由独立 `bootlogo_task` 画）**5.20 / 5.23 ms**，工作区（log
 `decoder_drawimg` 少了两次 mutex 进出。**处置**：该重构与 RP2040 那批改动互相独立，可以单独
 回退换回这 5.6%（影响面只限"整屏单次传输"这一档）。完整记录见 [fps-bench.md](fps-bench.md)。
 
-### 9. 量一下 JPEG 路径到底卡在设备还是链路
-JPEGDEC 载荷最小（全屏 JPEG 约 20~40 KB，链路只要 ~30 ms），但解码重，很可能是**设备受限**
-的路径 —— 也就是"热点函数放 SRAM"真正能收益的场景（QOI 那边实测设备侧只快 6~9%、端到端
-看不出来）。要做的：`DECODER_TYPE=1` + `DECODER_STATS=1` 构建，用
-`Display.send_raw(jpeg_bytes, 0, 0, 479, 319)` 发全屏 JPEG（仓库里没有发 JPEG 的脚本，得自己
-拼），取 `draw_us` 与端到端，再和 XIP / 解码循环进 SRAM 两组对比。**未做**。
+### 9. 量一下 JPEG 路径到底卡在设备还是链路 —— **前半已结案**（2026-10）
+
+**结论：JPEG 是设备侧（解码）受限，而且解码耗时与主频近似完全线性。**
+整屏 480×320、21 960 B/帧的 JPEG：`min`（≈纯 USB）**23.25 → 23.10 ms 不变**、
+稳态 **69.04 → 42.59 ms**（225 → 366 MHz，主频 ×1.627 换来 ×1.62）⇒ 15.06 → **24.23 fps**。
+同条件 QOI 照片档几乎不动（139.08 → 138.75 ms，因为它链路受限）。量具是新增的
+`tools/jpeg_bench.py`（主机侧端到端，编码在计时外；`median/min` 分离链路/设备受限）。
+数据与注意事项见 [decoder-architecture.md](decoder-architecture.md)。
+
+**后半：不用做了** ✗ —— 接 `pico-turbo` 把主频提到 **520 MHz**（1.60V，flash div 4 = 130 MHz）
+后实测稳态 **27.35 ms ⇒ 37.4 fps**，`steady/min = 1.19x`，**瓶颈已经变成全速 USB 链路**
+（23 ms/帧的地板）⇒ 再优化设备侧解码（含"放进 SRAM"）没有收益空间 ✓。
+564 MHz（`extreme`）实测不可用（见 [architecture.md](architecture.md)）。
+另外注意：**用 gdb/openocd 挂上去会把目标 halt，之后设备就不再应答控制请求**（是否 halt
+本身引起未定位），所以设备侧计数器的读取要安排在测量之前/之后，不要夹在中间。
 
 ### 10. RLE 也换成"非回调 + band 乒乓"（**未做**）
 `rgb565_rle_decompress()`（非回调版，缓冲由调用方给）和 QOI 那边一样存在。QOI 换成"非回调 +

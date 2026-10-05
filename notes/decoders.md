@@ -14,8 +14,8 @@
 
 | 值 | 名称 | 输入 | 状态 | 详情 |
 | --- | --- | --- | --- | --- |
-| 0 | tjpgd | JPEG | 可用；局刷正确但慢（480×320 全屏 114.6~175.3 ms） | [decoder-architecture.md](decoder-architecture.md) |
-| 1 | JPEGDEC | JPEG | 可用且更快（66.1~76.4 ms），但 `x != 0` 会卡死显示 | [decoder-architecture.md](decoder-architecture.md) |
+| 0 | tjpgd | JPEG | 可用；局刷正确但慢（480×320 全屏 114.6~175.3 ms @225 MHz） | [decoder-architecture.md](decoder-architecture.md) |
+| 1 | JPEGDEC | JPEG | 可用且更快（66.1~76.4 ms @225 MHz，**与主频近似线性**），但 `x != 0` 会卡死显示 | [decoder-architecture.md](decoder-architecture.md) |
 | 2 | LZ4 | LZ4 band | 可用；**每个传输一个 band**（block 不能分块解码） | [lz4.md](lz4.md) |
 | 3 | **QOI** | RGB565 QOI | **当前使用**（全屏比两种 JPEG 快 12~20 倍） | [qoi.md](qoi.md) |
 | 4 | RLE | RGB565 RLE | 可用；高熵内容比 QOI 小，结构化内容比 QOI 大 | [codec-selection.md](codec-selection.md) |
@@ -26,7 +26,7 @@
 
 | 文档 | 一句话内容 |
 | --- | --- |
-| [decoder-architecture.md](decoder-architecture.md) | `DECODER_TYPE` 分发、`decoder_names[]`、drawimg 签名、两种 JPEG 实现与 JPEGDEC 局刷 bug |
+| [decoder-architecture.md](decoder-architecture.md) | `DECODER_TYPE` 分发、`decoder_names[]`、drawimg 签名、两种 JPEG 实现、JPEGDEC 局刷 bug、**JPEG 解码与主频的关系** |
 | [frame-pipeline.md](frame-pipeline.md) | 帧槽、EP1 流控（背压）、为什么解码必须在任务里、诊断计数器 |
 | [qoi.md](qoi.md) | QOI 回调/非回调解码、band 乒乓、RUN 批量填充、异步刷新的缓冲区契约 |
 | [codec-selection.md](codec-selection.md) | 桌面负载下 QOI/RLE/LZ4 的实测选型、同源复量、量具纠正 |

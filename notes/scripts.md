@@ -81,7 +81,8 @@ python3 tools/pud_usb.py      # 自检：对照 C 库参考向量校验编码器
 | --- | --- | --- |
 | `tools/img_viewer.py` | 显示一张图片（`--codec qoi/rle/lz4` 指定设备构型） | Pillow 或 cv2 |
 | `tools/video_player.py` | 播放视频（不落盘，`--codec` 同上） | ffmpeg |
-| `tools/fps_bench.py` | 全刷/局刷 FPS 基准 | numpy |
+| `tools/fps_bench.py` | 全刷/局刷 FPS 基准（QOI/RLE/LZ4 载荷） | numpy |
+| `tools/jpeg_bench.py` | **整屏 JPEG** 基准（JPEG 帧由主机给字节；配 `DECODER_TYPE=1/0` 用） | Pillow（`--image` 时） |
 | `tools/touch_draw.py` | 屏上触摸反馈（`--mode trace/grid/targets`） | numpy |
 | `tools/codec_compare.py` | QOI / RLE / LZ4 同内容端到端对比（需按构型分次烧写） | numpy |
 | `tools/desktop_codecs.py` | **桌面负载**：按"桌面会脏的矩形"比较编解码器 | numpy |

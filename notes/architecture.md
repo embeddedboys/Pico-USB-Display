@@ -60,6 +60,11 @@ set(PIO_USE_DMA 1)
 | 桌面负载全屏（`desktop_codecs --frames 150`，QOI） | 94.00 ms | **89.10 ms**（-5%） |
 | 同上 wallpaper strip | 23.79 ms | **20.79 ms**（-13%） |
 
+**别把这 5% 外推到 JPEG**：那几档都是 **QOI**，而 QOI 全屏桌面是**链路受限**（93 893 B ÷ ~1 MB/s
+= 89 ms）⇒ 加主频当然没用 ✓。JPEG 载荷小得多（整屏 ~20 KB）、**设备侧解码受限**，实测
+225 → 366 MHz（×1.627）时稳态从 69.04 → **42.59 ms（×1.62，近似完全线性）**，
+见 [decoder-architecture.md](decoder-architecture.md)。
+
 **为什么只快这么一点**（`DECODER_STATS=1` 实测拆解）：
 
 | 用例 | 设备侧 `draw_us` | 其中 `flush_us` | 像素 |
@@ -90,6 +95,30 @@ set(PIO_USE_DMA 1)
 - 真实负载的瓶颈是**全速 USB 链路（约 1 MB/s）**：全屏桌面内容 93893 B 要传 89 ms，而设备侧
   同一帧按内容要 4~45 ms —— 链路仍是主因，但设备侧已经不是零头了。想更快首先得减少字节数
   （更好的压缩、更小的脏区），不是加主频、也不是改 PIO。
+
+### 更高主频：接 `pico-turbo`（2026-10 实测）
+
+`lib/pico-turbo` 本来就是本仓的子模块（`.gitmodules`）。接法：`add_subdirectory()` + 链接
+`pico_turbo`，在 `main()` 里**时钟块之后**调一次 `pico_turbo_init()`。**不指定目标频率时它是
+no-op**（configure 会打 `pico-turbo: disabled (stock clocks)`）⇒ 接进来本身不改变现有行为 ✓。
+
+实测（同一份 `DECODER_TYPE=1` 固件、整屏 480×320 JPEG，见
+[decoder-architecture.md](decoder-architecture.md)）：**520 MHz（`turbo`，1.60V）可用**，
+整屏 JPEG 从 15.1 → **37.4 fps**（此时已 USB 受限）；**564 MHz（`extreme`）不可用** ✗
+（两次都失败：一次应答 `caps` 后上负载挂住、一次连枚举都不应答）。后者与 pico-turbo 板文件里
+"564 是**单核**档、双核会 hard-fault"的独立观察一致 —— 本仓是双核 FreeRTOS 固件 ✓。
+
+两个必须知道的坑（都是实测）：
+
+1. **它会顺手把 `clk_peri` 重指到 `clk_sys`，而本仓的 PIO 分频是拿编译期常量算的**
+   （`drivers/bus/pio_i80.c`：`DEFAULT_PIO_CLK_KHZ / 2 / TFT_BUS_CLK_KHZ`，其中
+   `DEFAULT_PIO_CLK_KHZ = 构建时的 PERI_CLK_KHZ`）⇒ 若不处理，面板时钟会跟着涨到
+   520/2.25 ≈ **231 MHz**，远超 ILI9488 的极限 ✗。所以 `pico_turbo_init()` 之后要把
+   `clk_peri` 恢复成编译时的值（`main.c` 里就照原样再 `clock_configure` 一次）。
+   pico-turbo 自己的头文件也警告过这类"把频率烘进编译期常量"的应用。
+2. **`-DPICO_TURBO_PROFILE=none` 在 pico2 上会报 unknown profile** ✗（`docs/configuration.md`
+   说 `none` = stock，但板文件 `boards/pico2.cmake` 不接受它）⇒ 想要 stock 就**别传这个变量**
+   （留空 = no-op ✓），或传空串 `-DPICO_TURBO_PROFILE=`。
 
 ### 热点函数放 SRAM（`PUD_CODEC_IN_RAM`，2026-09 实测）
 
