@@ -47,7 +47,9 @@ int draw_mcus(JPEGDRAW *pDraw)
 	int xe = pDraw->x + iWidth - 1;
 	int ye = pDraw->y + pDraw->iHeight - 1;
 
+	STAT_FLUSH_T0();
 	tft_video_flush(xs, ys, xe, ye, pDraw->pPixels, iCount);
+	STAT_FLUSH_ADD(iWidth * pDraw->iHeight);
 	return iCount;
 }
 
@@ -57,6 +59,7 @@ void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
 	static struct jpegdec_data *jpegdec = &g_jpegdec;
 	int ret;
 
+	STAT_T0();      /* DECODER_STATS：整次 drawimg（解码 + 回调里的 flush） */
 	JPEG_setPixelType(&jpegdec->img, RGB565_LITTLE_ENDIAN);
 
 	ret = JPEG_openRAM(&jpegdec->img, jpeg_data, jpeg_size, draw_mcus);
@@ -70,6 +73,7 @@ void jpegdec_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data,
 		// );
 		JPEG_decode(&jpegdec->img, xs, ys, jpegdec->options);
 	}
+	STAT_DRAW_ADD();
 }
 
 /*
@@ -144,8 +148,10 @@ static void tjpgd_flush_group(void)
 	if (y + rows > g_pud_data.disp.yres)
 		rows = g_pud_data.disp.yres - y;
 
+	STAT_FLUSH_T0();
 	tft_video_flush(s_tjpgd.x, y, s_tjpgd.x + s_tjpgd.width - 1,
 	                y + rows - 1, s_tjpgd_rowbuf, s_tjpgd.width * rows * 2);
+	STAT_FLUSH_ADD(s_tjpgd.width * rows);
 }
 
 static int tjpgd_output(JDEC *jdec, void *bitmap, JRECT *rect)
@@ -227,8 +233,10 @@ void tjpgd_drawimg(u16 xs, u16 ys, u16 xe, u16 ye, u8 *jpeg_data, u32 jpeg_size)
 	if (s_tjpgd.width > g_pud_data.disp.xres)
 		s_tjpgd.width = g_pud_data.disp.xres;
 
+	STAT_T0();      /* DECODER_STATS：整次 drawimg（解码 + 分组 flush） */
 	res = jd_decomp(&jdec, tjpgd_output, 0);
 	tjpgd_flush_group();
+	STAT_DRAW_ADD();
 	if (res != JDR_OK)
 		printf("tjpgd: jd_decomp failed: %d\n", res);
 }
