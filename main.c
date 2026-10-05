@@ -42,6 +42,7 @@
 #include "task.h"
 
 #include "pud.h"
+#include "pico_turbo.h"
 
 #if PUD_FREERTOS_RUN_TIME_STATS
 uint32_t pud_runtime_counter(void)
@@ -294,6 +295,26 @@ int main(void)
 
 	printf("\n\n\nPICO USB Display\n");
 	printf("CPU clockspeed: %d MHz\n", CPU_SPEED_MHZ);
+
+	/* pico-turbo：运行时把 clk_sys/电压提到构建时指定的目标（不指定则它是 no-op，
+	 * 行为与以前完全一致）。放在上面那段之后，因为这里要覆盖它的 clk_sys 与 VREG。
+	 *
+	 * 它顺带会把 clk_peri 重指到 clk_sys，而显示层的 PIO 分频是按**编译期**常量
+	 * （`DEFAULT_PIO_CLK_KHZ / 2 / TFT_BUS_CLK_KHZ`，见 drivers/bus/pio_i80.c）算的
+	 * ⇒ 必须把 clk_peri 恢复成编译时的那个值，否则面板时钟会跟着 clk_sys 涨到
+	 * 520/2.25 ≈ 231 MHz，远超 ILI9488 的极限 ✗。
+	 */
+	pico_turbo_init();
+	clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLK_SYS,
+	                CPU_SPEED_MHZ * MHZ, CPU_SPEED_MHZ * MHZ);
+	{
+		pico_turbo_state_t st = pico_turbo_state();
+		printf("pico-turbo: enabled=%d reached=%d sys=%u kHz vreg_sel=%u "
+		       "peri=%u kHz flash=%u kHz usb_ok=%d\n",
+		       (int)st.enabled, (int)st.reached, (unsigned)st.sys_clk_khz,
+		       (unsigned)st.vreg_sel, (unsigned)st.peri_clk_khz,
+		       (unsigned)st.flash_clk_khz, (int)st.usb_ok);
+	}
 
 	pud_init();
 

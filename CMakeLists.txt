@@ -135,6 +135,15 @@ add_subdirectory(${PICO_DISPLAY_LIB_PATH})
 add_subdirectory(${PUD_SOURCE_DIR}/cherryusb)
 add_subdirectory(${PUD_SOURCE_DIR}/decoders)
 
+# pico-turbo：运行时接管 clk_sys 与核心电压（电压升档它比 SDK 的 VREG_VOLTAGE_MAX
+# 走得更高：RP2350 到 1.60V）。**构建时不指定目标频率它就是 no-op**，所以接进来本身
+# 不改变现有行为；要用：
+#   cmake .. -DPICO_TURBO_PROFILE=turbo     # pico2: 520 MHz @1.60V —— 双核实测过的档
+#   cmake .. -DPICO_TURBO_PROFILE=extreme   # pico2: 564 MHz @1.60V —— **单核**档，见 pico-turbo/boards/pico2.cmake
+# 放在显示库之后：它的 flash 分频推导要覆盖 PICO_FLASH_SPI_CLKDIV（225MHz 时是 3，
+# 520MHz 得 ≥4 才能把 XIP 压在 flash 的 133MHz 额定内）。
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/pico-turbo ${CMAKE_BINARY_DIR}/pico-turbo)
+
 
 # Decoder selection
 # Note: This affects the decoding rate.
@@ -235,6 +244,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 target_link_libraries(${PROJECT_NAME}
+    pico_turbo
     pico_stdlib
     # pico_multicore
     pico_unique_id
