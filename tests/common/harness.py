@@ -35,6 +35,10 @@ them, and exits 5 (INCONCLUSIVE).  A missing device is never a FAIL either --
 it is 3 (ENVIRONMENT_ERROR).  Both mappings live here, not in the tests.
 
     python3 tests/test_x.py --help
+
+**这一份有两处副本，改动要两边同步**（像 `skills/` 那样，用 `diff` 校验为空）：
+`Pico-USB-Display/tests/common/harness.py` 与
+`pico_dm_qd3503728_esp32p4_idf/wireless/p4_wireless_display/tests/common/harness.py`。
 '''
 
 import argparse
@@ -51,7 +55,10 @@ _TOOLS = os.path.normpath(os.path.join(_HERE, os.pardir, os.pardir, "tools"))
 if _TOOLS not in sys.path:
     sys.path.insert(0, _TOOLS)
 
-import pud_usb  # noqa: E402  (path set up above)
+try:
+    import pud_usb  # noqa: E402  (path set up above)
+except ImportError:      # 不需要 USB 设备访问的测试（needs_device=False）
+    pud_usb = None       # 项目里没有 tools/pud_usb.py 时也能用这套 CLI/退出码/oracle
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -191,7 +198,7 @@ class Test:
 # CLI
 # ---------------------------------------------------------------------------
 
-def _add_common_options(ap, default_timeout):
+def _add_common_options(ap, default_timeout, needs_device=True):
     ap.add_argument("--version", action="version",
                     version="%(prog)s " + VERSION)
     ap.add_argument("--json", action="store_true",
@@ -203,12 +210,13 @@ def _add_common_options(ap, default_timeout):
     ap.add_argument("--timeout", type=float, default=default_timeout,
                     help="whole-run timeout in seconds (default %g)"
                          % default_timeout)
-    ap.add_argument("--device-timeout", type=float, default=None,
-                    help="per-transfer timeout in ms (pud_usb default)")
-    ap.add_argument("--vendor", type=lambda v: int(v, 0), default=pud_usb.VID,
-                    help="USB vendor id (default 0x%04x)" % pud_usb.VID)
-    ap.add_argument("--product", type=lambda v: int(v, 0), default=pud_usb.PID,
-                    help="USB product id (default 0x%04x)" % pud_usb.PID)
+    if needs_device and pud_usb is not None:
+        ap.add_argument("--device-timeout", type=float, default=None,
+                        help="per-transfer timeout in ms (pud_usb default)")
+        ap.add_argument("--vendor", type=lambda v: int(v, 0), default=pud_usb.VID,
+                        help="USB vendor id (default 0x%04x)" % pud_usb.VID)
+        ap.add_argument("--product", type=lambda v: int(v, 0), default=pud_usb.PID,
+                        help="USB product id (default 0x%04x)" % pud_usb.PID)
 
 
 def _alarm_handler(signum, frame):
@@ -221,8 +229,11 @@ def _status_of(report):
     return "PASS" if report.ok else "FAIL"
 
 
-def _emit(test, report, extra):
-    status = _status_of(report)
+def _emit(test, report, extra, code=None):
+    # 状态必须与退出码一致（这一层就是为一致性存在的）：runner 已经定了码的场合
+    # （环境问题/超时/用法错）按码报，没定才由 report 推。踩过：没接板子时退出码 3
+    # 但打印 INCONCLUSIVE ✗。
+    status = STATUS_BY_CODE.get(code) if code is not None else _status_of(report)
 
     if extra.get("json"):
         payload = {"test": test.name, "status": status,
@@ -262,6 +273,10 @@ def _run(test, args):
     try:
         if not test.needs_device:
             report = test.fn(None, args)
+        elif pud_usb is None:
+            print("[ENVIRONMENT] this project has no tools/pud_usb.py",
+                  file=sys.stderr)
+            code = EXIT_ENVIRONMENT_ERROR
         else:
             try:
                 dev = pud_usb.open_device(vid=args.vendor, pid=args.product)
@@ -275,7 +290,8 @@ def _run(test, args):
         print("[TIMEOUT] %s" % exc, file=sys.stderr)
         report = Report.of(inconclusive=True, detail=str(exc))
         code = EXIT_TIMEOUT
-    except (pud_usb.PudError, EnvironmentProblem) as exc:
+    except ((pud_usb.PudError if pud_usb else EnvironmentProblem),
+            EnvironmentProblem) as exc:
         print("[ENVIRONMENT] %s" % exc, file=sys.stderr)
         report = Report.of(inconclusive=True, detail=str(exc))
         code = EXIT_ENVIRONMENT_ERROR
@@ -303,7 +319,7 @@ def _run(test, args):
         code = (EXIT_INCONCLUSIVE if (report.inconclusive or report.ok is None)
                 else EXIT_PASS if report.ok else EXIT_FAIL)
 
-    _emit(test, report, {"json": args.json})
+    _emit(test, report, {"json": args.json}, code)
     return code
 
 
@@ -313,7 +329,7 @@ def run_test(test, argv=None):
         description=test.description or test.name,
         epilog="exit codes: 0 PASS, 1 FAIL, 2 INVALID_USAGE, "
                "3 ENVIRONMENT_ERROR, 4 TIMEOUT, 5 INCONCLUSIVE")
-    _add_common_options(ap, test.default_timeout)
+    _add_common_options(ap, test.default_timeout, test.needs_device)
     if test.extra_args:
         test.extra_args(ap)
     args = ap.parse_args(argv)
