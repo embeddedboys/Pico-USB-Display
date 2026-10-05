@@ -175,6 +175,42 @@ Choose the smallest safe change
 
 ---
 
+## 1.5 Bring up the official example first
+
+碰到新平台、新外设、新协议栈、没做过的事：`RECONNAISSANCE → MODEL` 之后**不要直接开始写自己的
+代码** —— 先**跑通上游官方例子**（厂商 SDK / 官方仓库里那个 demo），用**它自己的输出**证明：
+
+```text
+toolchain
+flash / boot path
+wiring
+clock / reset
+power
+link (USB / WiFi / bus)
+```
+
+这些东西都是好的，才算拿到了**基线**；此后自己的代码 = 官方例子 + **最小 delta**。
+
+- **复用官方那份构建配方**：`CMakeLists` / `Kconfig` / `sdkconfig`、官方引脚与初始化顺序照搬。
+- **官方例子源码逐字不动**（放 `third_party/`，不改写）；差异用 wrapper / 独立文件 / 编译选项承载，
+  每处 delta 都能指认"改了哪一行 / 哪个选项、为什么"，并且单独验证。
+- **不许凭经验把官方初始化流程重写一遍** ✗ —— 那会让"我的代码写错了"和"硬件/链路本来就不对"
+  混在一起，两边的结论都不可信。
+
+官方例子跑不通时，先按**仪器问题**处理：
+
+- **先怀疑仪器**（串口读者、量具、烧写、接线、常驻进程的生死），**不要据此宣布"硬件坏了"** ✗。
+  量具要能自证：读者自报读到的字节数、**先开读者再复位**、常驻监听用受管后台作业
+  （`setsid … &` 会随调用一起被杀）。
+- **官方例子本身也要验**：长期没人编的分支可能根本编不过（缺宏）；看起来正常的调用可能
+  **从未执行**。判据是**观察到的行为**，不是"代码长这样"。
+
+真实事故：某个官方例子的客户端模式同时坏在两处 —— 缺一个宏导致编不过；唯一的启动调用被写在
+`assert()` 里，Release（`-DNDEBUG`）下整句被删掉 ⇒ 静默一个包都没发。而上游 CMakeLists 从来只建
+服务端 target ⇒ 这条分支长期无人编译。**"官方例子"不等于"能跑的代码"。**
+
+---
+
 # 2. Repository Exploration Workflow
 
 ## Phase 0 — Task Understanding
@@ -1381,6 +1417,11 @@ userspace interface
 ```text
 hardware behavior ≠ source-code behavior
 ```
+
+如果上游有**官方例子/参考实现**（厂商 SDK 的 demo、上游 in-tree 驱动、`Documentation/` 里的示例），
+**先跑通它**再写自己的代码 —— 见 §1.5。它是把 `driver` / `protocol` / `hardware datasheet` /
+`firmware` / `device tree` 五件事一次对齐的最短路径，也是唯一能把"我的代码不对"与"硬件/配置不对"
+分开的做法。
 
 如果代码行为依赖硬件协议，应同时确认：
 
